@@ -1,0 +1,45 @@
+{
+  "name": "openclaw-repo-agent",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "npm-first packaging for reusable OpenClaw, Telegram, and ACP repo agent flows.",
+  "license": "MIT",
+  "homepage": "https://github.com/openclaw/openclaw-repo-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw-repo-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw-repo-agent/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "openclaw",
+    "telegram",
+    "acp",
+    "agent",
+    "automation"
+  ],
+  "bin": {
+    "openclaw-repo-agent": "./cli/bin/openclaw-repo-agent.mjs"
+  },
+  "files": [
+    "cli/**/*",
+    "runtime/**/*",
+    "schemas/**/*",
+    "profiles/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",
+    "pack:dry-run": "npm pack --dry-run",
+    "test": "npm run check && npm run pack:dry-run"
+  }
+}

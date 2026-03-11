@@ -1,0 +1,351 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/openclaw/project-manifest.schema.json",
+  "title": "OpenClaw Project Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "projectName",
+    "repoPath",
+    "toolingProfile",
+    "runtimeProfile",
+    "queueProfile",
+    "instructionFiles",
+    "verificationCommands",
+    "agent",
+    "telegram",
+    "acp",
+    "security"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "projectName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repoPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deploymentProfile": {
+      "type": "string",
+      "enum": [
+        "docker-local",
+        "wsl2",
+        "linux-vps",
+        "native-dev"
+      ]
+    },
+    "toolingProfile": {
+      "type": "string",
+      "enum": [
+        "none",
+        "java17",
+        "node20",
+        "python311",
+        "go122",
+        "polyglot"
+      ]
+    },
+    "toolingInstallCommand": {
+      "type": "string"
+    },
+    "runtimeProfile": {
+      "type": "string",
+      "enum": [
+        "stable-chat",
+        "interactive-steer",
+        "topic-bound-acp",
+        "ci-runner"
+      ]
+    },
+    "queueProfile": {
+      "type": "string",
+      "enum": [
+        "stable-chat",
+        "interactive-steer",
+        "topic-bound-acp",
+        "ci-runner"
+      ]
+    },
+    "instructionFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "knowledgeFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verificationCommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "agent": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "agentDir": {
+          "type": "string"
+        },
+        "maxConcurrent": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "skipBootstrap": {
+          "type": "boolean"
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "verboseDefault": {
+          "type": "string"
+        },
+        "blockStreamingDefault": {
+          "type": "string"
+        },
+        "blockStreamingBreak": {
+          "type": "string"
+        },
+        "typingMode": {
+          "type": "string"
+        },
+        "typingIntervalSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "deny": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "collect",
+            "steer"
+          ]
+        },
+        "debounceMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "inboundDebounceMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "telegram": {
+      "type": "object",
+      "required": [
+        "dmPolicy",
+        "groupPolicy",
+        "streamMode",
+        "replyToMode"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "dmPolicy": {
+          "type": "string",
+          "enum": [
+            "pairing",
+            "allowlist",
+            "open",
+            "disabled"
+          ]
+        },
+        "allowFrom": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "groupPolicy": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "allowlist",
+            "open"
+          ]
+        },
+        "groupAllowFrom": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "streamMode": {
+          "type": "string",
+          "enum": [
+            "partial",
+            "block",
+            "off"
+          ]
+        },
+        "blockStreaming": {
+          "type": "boolean"
+        },
+        "replyToMode": {
+          "type": "string",
+          "enum": [
+            "first",
+            "latest"
+          ]
+        },
+        "reactionLevel": {
+          "type": "string"
+        },
+        "configWrites": {
+          "type": "boolean"
+        },
+        "proxy": {
+          "type": "string"
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "autoSelectFamily": {
+              "type": "boolean"
+            }
+          }
+        },
+        "groups": {
+          "type": "object"
+        },
+        "threadBindings": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "spawnAcpSessions": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "acp": {
+      "type": "object",
+      "required": [
+        "defaultAgent",
+        "allowedAgents",
+        "preferredMode"
+      ],
+      "properties": {
+        "defaultAgent": {
+          "type": "string"
+        },
+        "allowedAgents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "preferredMode": {
+          "type": "string"
+        },
+        "maxConcurrentSessions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ttlMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stream": {
+          "type": "object",
+          "properties": {
+            "coalesceIdleMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxChunkChars": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "messages": {
+      "type": "object"
+    },
+    "tools": {
+      "type": "object",
+      "properties": {
+        "exec": {
+          "type": "object",
+          "properties": {
+            "timeoutSec": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "required": [
+        "authBootstrapMode",
+        "commandLoggerEnabled",
+        "toolDeny"
+      ],
+      "properties": {
+        "authBootstrapMode": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "external",
+            "none"
+          ]
+        },
+        "commandLoggerEnabled": {
+          "type": "boolean"
+        },
+        "toolDeny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

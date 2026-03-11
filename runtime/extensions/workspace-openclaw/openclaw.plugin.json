@@ -1,0 +1,108 @@
+{
+  "id": "workspace-openclaw",
+  "name": "Workspace OpenClaw",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "projectName": {
+        "type": "string"
+      },
+      "workspace": {
+        "type": "string"
+      },
+      "repoPath": {
+        "type": "string"
+      },
+      "repoRoot": {
+        "type": "string"
+      },
+      "deploymentProfile": {
+        "type": "string"
+      },
+      "runtimeProfile": {
+        "type": "string"
+      },
+      "queueProfile": {
+        "type": "string"
+      },
+      "toolingProfile": {
+        "type": "string"
+      },
+      "instructionFiles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "knowledgeFiles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "verificationCommands": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "acpAllowedAgents": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "preferredAcpAgent": {
+        "type": "string"
+      },
+      "preferredAcpMode": {
+        "type": "string"
+      },
+      "agentDefaultModel": {
+        "type": "string"
+      },
+      "agentVerboseDefault": {
+        "type": "string"
+      },
+      "agentToolsDeny": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "telegramBlockStreaming": {
+        "type": "boolean"
+      },
+      "telegramDmPolicy": {
+        "type": "string"
+      },
+      "telegramGroupPolicy": {
+        "type": "string"
+      },
+      "telegramAllowFrom": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "telegramGroupAllowFrom": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "telegramStreamMode": {
+        "type": "string"
+      },
+      "telegramThreadBindingsEnabled": {
+        "type": "boolean"
+      },
+      "defaultQueueMode": {
+        "type": "string"
+      }
+    }
+  }
+}

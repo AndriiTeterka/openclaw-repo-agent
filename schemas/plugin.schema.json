@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/openclaw/plugin.schema.json",
+  "title": "OpenClaw Repo Plugin Config",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "profile",
+    "projectName",
+    "deploymentProfile",
+    "toolingProfile",
+    "runtimeProfile",
+    "queueProfile",
+    "instructionFiles",
+    "knowledgeFiles",
+    "verificationCommands",
+    "agent",
+    "telegram",
+    "acp",
+    "security"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "profile": {
+      "type": "string",
+      "enum": [
+        "custom"
+      ]
+    },
+    "deploymentProfile": {
+      "type": "string",
+      "enum": [
+        "docker-local",
+        "wsl2",
+        "linux-vps",
+        "native-dev"
+      ]
+    },
+    "projectName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "toolingProfile": {
+      "type": "string",
+      "enum": [
+        "none",
+        "java17",
+        "node20",
+        "python311",
+        "go122",
+        "polyglot"
+      ]
+    },
+    "runtimeProfile": {
+      "type": "string",
+      "enum": [
+        "stable-chat",
+        "interactive-steer",
+        "topic-bound-acp",
+        "ci-runner"
+      ]
+    },
+    "queueProfile": {
+      "type": "string",
+      "enum": [
+        "stable-chat",
+        "interactive-steer",
+        "topic-bound-acp",
+        "ci-runner"
+      ]
+    },
+    "instructionFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "knowledgeFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verificationCommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "agent": {
+      "type": "object"
+    },
+    "telegram": {
+      "type": "object"
+    },
+    "acp": {
+      "type": "object"
+    },
+    "security": {
+      "type": "object"
+    }
+  }
+}

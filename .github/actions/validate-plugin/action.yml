@@ -1,0 +1,20 @@
+name: Validate OpenClaw Plugin
+description: Validate a consumer repo's .openclaw/plugin.json with the bundled CLI.
+inputs:
+  repo-root:
+    description: Repository root to validate.
+    required: false
+    default: .
+  extra-args:
+    description: Extra CLI arguments for validation.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        node ./cli/bin/openclaw-repo-agent.mjs config validate \
+          --repo-root "${{ inputs.repo-root }}" \
+          --product-root "." \
+          ${{ inputs.extra-args }}

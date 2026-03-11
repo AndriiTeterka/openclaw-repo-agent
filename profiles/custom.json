@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "profile": "custom",
+  "projectName": "workspace",
+  "deploymentProfile": "docker-local",
+  "toolingProfile": "none",
+  "runtimeProfile": "stable-chat",
+  "queueProfile": "stable-chat",
+  "instructionFiles": [
+    "README.md",
+    ".openclaw/instructions.md"
+  ],
+  "knowledgeFiles": [
+    ".openclaw/knowledge.md"
+  ],
+  "verificationCommands": [],
+  "agent": {
+    "id": "workspace",
+    "name": "Workspace",
+    "maxConcurrent": 4
+  },
+  "telegram": {
+    "dmPolicy": "pairing",
+    "groupPolicy": "disabled",
+    "streamMode": "partial",
+    "replyToMode": "first"
+  },
+  "acp": {
+    "defaultAgent": "assistant",
+    "allowedAgents": [
+      "assistant"
+    ]
+  },
+  "security": {
+    "authBootstrapMode": "external",
+    "toolDeny": [
+      "process"
+    ]
+  }
+}

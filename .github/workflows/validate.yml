@@ -1,0 +1,43 @@
+name: Validate Repo Agent
+
+on:
+  push:
+    paths:
+      - ".github/**"
+      - "cli/**"
+      - "examples/**"
+      - "package.json"
+      - "profiles/**"
+      - "runtime/**"
+      - "schemas/**"
+      - "README.md"
+  pull_request:
+    paths:
+      - ".github/**"
+      - "cli/**"
+      - "examples/**"
+      - "package.json"
+      - "profiles/**"
+      - "runtime/**"
+      - "schemas/**"
+      - "README.md"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate example and package contents
+        run: npm test
+
+      - name: Validate example through reusable action
+        uses: ./.github/actions/validate-plugin
+        with:
+          repo-root: ./examples/custom
