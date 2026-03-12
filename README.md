@@ -40,6 +40,8 @@ npx openclaw-repo-agent pair
 
 `init` and `up` now automatically enforce the required Docker MCP setup for the current repo, reconnect Codex if needed, and sync configured credentials into Docker MCP secrets.
 
+If the default prebuilt runtime image is unavailable, `up` automatically falls back to a local runtime build and persists that choice in `.openclaw/local.env`.
+
 `init` auto-detects repo-derived settings first, including project name, tooling profile, instruction files, knowledge files, and verification commands. The interactive flow mainly asks for user-specific inputs such as:
 
 - ACP default agent
@@ -153,8 +155,10 @@ node ./cli/bin/openclaw-repo-agent.mjs init --repo-root /path/to/repo --product-
 ## Release Model
 
 - npm package: `openclaw-repo-agent`
-- runtime images: `ghcr.io/<owner>/openclaw-repo-agent-runtime`
+- runtime images: `ghcr.io/andriiteterka/openclaw-repo-agent-runtime`
 - release tags: `vX.Y.Z`
+
+npm publishing is configured for GitHub Actions trusted publishing via [`.github/workflows/release.yml`](.github/workflows/release.yml). Before the first release, configure the npm package to trust this repository/workflow on npm. No `NPM_TOKEN` repository secret is needed for package publishing.
 
 The GitHub Actions workflows in [`.github/workflows`](.github/workflows) are already repo-root ready.
 

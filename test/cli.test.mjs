@@ -32,7 +32,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.1.0");
+  assert.equal(stdout.trim(), "0.1.1");
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -49,5 +49,5 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.1.0");
+  assert.equal(payload.productVersion, "0.1.1");
 });

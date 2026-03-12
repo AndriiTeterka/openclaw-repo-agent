@@ -44,6 +44,7 @@ import {
   summarizeDockerMcpSecretPlan
 } from "./docker-mcp.mjs";
 import { detectRepository } from "./repository-detection.mjs";
+import { buildLocalRuntimeEnvOverrides, shouldAutoUseLocalBuild } from "./runtime-image.mjs";
 
 const ARRAY_FLAGS = new Set([
   "instruction-file",
@@ -102,6 +103,7 @@ const DEFAULT_LOCAL_ENV_EXAMPLE_FILE = "local.env.example";
 const DEFAULT_PLUGIN_FILE = "plugin.json";
 const DEFAULT_INSTRUCTIONS_FILE = "instructions.md";
 const DEFAULT_KNOWLEDGE_FILE = "knowledge.md";
+const LOCAL_ENV_HEADER = "Local-only OpenClaw configuration. Keep this file out of git.";
 
 function uniqueStrings(values) {
   return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -774,6 +776,37 @@ function emptyDockerMcpSecretStatus() {
   };
 }
 
+async function ensureRuntimeImageReady(context, state, options = {}) {
+  let nextState = state;
+  let autoSwitchedToLocalBuild = false;
+
+  if (nextState.useLocalBuild) {
+    return { state: nextState, autoSwitchedToLocalBuild };
+  }
+
+  const defaultStackImage = defaultRuntimeImage();
+  const pull = await dockerCompose(context, ["pull", "openclaw-gateway"], { capture: true });
+  const pullOutput = [pull.stderr, pull.stdout].filter(Boolean).join("\n");
+  if (pull.code === 0) {
+    return { state: nextState, autoSwitchedToLocalBuild };
+  }
+
+  if (!shouldAutoUseLocalBuild({
+    useLocalBuild: nextState.useLocalBuild,
+    stackImage: nextState.localEnv.OPENCLAW_STACK_IMAGE || defaultStackImage,
+    defaultStackImage,
+    errorOutput: pullOutput
+  })) {
+    throw new Error(pullOutput || "Failed to pull the runtime image.");
+  }
+
+  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage);
+  await writeEnvFile(context.paths.localEnvFile, nextLocalEnv, LOCAL_ENV_HEADER);
+  nextState = await prepareState(context, { ...options, useLocalBuild: true });
+  autoSwitchedToLocalBuild = true;
+  return { state: nextState, autoSwitchedToLocalBuild };
+}
+
 async function syncDockerMcpSecrets(context, localEnv) {
   await ensureDir(context.paths.stateDir);
   const previousState = await readJsonFile(context.paths.dockerMcpSecretsFile, {
@@ -1086,7 +1119,7 @@ async function handleInit(context, options) {
     await writeEnvFile(
       context.paths.localEnvFile,
       localEnvValues,
-      "Local-only OpenClaw configuration. Keep this file out of git."
+      LOCAL_ENV_HEADER
     );
   }
 
@@ -1142,7 +1175,7 @@ async function handleConfigMigrate(context, options) {
 }
 
 async function handleUp(context, options) {
-  const state = await prepareState(context, options);
+  let state = await prepareState(context, options);
   const mcp = await ensurePermanentDockerMcp(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
@@ -1152,11 +1185,21 @@ async function handleUp(context, options) {
     console.log(`Use ${path.relative(context.repoRoot, context.paths.manifestFile)} with the official OpenClaw onboarding flow.`);
     return;
   }
+
+  const runtimeReady = await ensureRuntimeImageReady(context, state, options);
+  state = runtimeReady.state;
+  if (runtimeReady.autoSwitchedToLocalBuild) {
+    console.log("Remote runtime image is unavailable. Falling back to a local runtime build.");
+  }
+
   const args = ["up", "-d"];
   if (state.useLocalBuild) args.push("--build");
   await dockerCompose(context, args);
   if (mcp.actions.length > 0) {
     console.log(`Docker MCP: ${mcp.actions.join(", ")}.`);
+  }
+  if (runtimeReady.autoSwitchedToLocalBuild) {
+    console.log(`Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.`);
   }
   console.log("OpenClaw stack is starting.");
 }
@@ -1218,7 +1261,7 @@ async function handlePair(context, options) {
       ...buildLocalEnvTemplateValues(plugin, localEnv, options, resolveBoolean(localEnv.OPENCLAW_USE_LOCAL_BUILD, false)),
       ...localEnv
     },
-    "Local-only OpenClaw configuration. Keep this file out of git."
+    LOCAL_ENV_HEADER
   );
   await prepareState(context, options);
   await rerenderIfRunning(context);
@@ -1417,7 +1460,7 @@ async function handleDoctor(context, options) {
       "runtime-image",
       pull.code === 0,
       pull.code === 0 ? "Runtime image is available." : pull.stderr.trim() || pull.stdout.trim() || "Failed to pull runtime image.",
-      pull.code === 0 ? "" : "Check registry access or set OPENCLAW_STACK_IMAGE to a reachable image."
+      pull.code === 0 ? "" : "Run `openclaw-repo-agent up` to auto-fallback to a local build, or set OPENCLAW_USE_LOCAL_BUILD=true."
     );
   } else {
     pushCheck(results, "runtime-image", true, "Local runtime build mode is enabled.");
@@ -1502,13 +1545,16 @@ async function handleDoctor(context, options) {
 
 async function handleUpdate(context, options) {
   await handleConfigMigrate(context, options);
-  const state = await prepareState(context, options);
+  let state = await prepareState(context, options);
   await ensurePermanentDockerMcp(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
-  if (!state.useLocalBuild) {
-    await dockerCompose(context, ["pull", "openclaw-gateway"]);
+  const runtimeReady = await ensureRuntimeImageReady(context, state, options);
+  state = runtimeReady.state;
+  if (runtimeReady.autoSwitchedToLocalBuild) {
+    console.log("Remote runtime image is unavailable. Falling back to a local runtime build.");
+    console.log(`Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.`);
   }
   if (await gatewayRunning(context)) {
     const args = ["up", "-d"];

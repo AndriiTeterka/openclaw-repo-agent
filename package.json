@@ -1,17 +1,17 @@
 {
   "name": "openclaw-repo-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "npm-first packaging for reusable OpenClaw, Telegram, and ACP repo agent flows.",
   "license": "MIT",
-  "homepage": "https://github.com/openclaw/openclaw-repo-agent#readme",
+  "homepage": "https://github.com/AndriiTeterka/openclaw-repo-agent#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw-repo-agent.git"
+    "url": "git+https://github.com/AndriiTeterka/openclaw-repo-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw-repo-agent/issues"
+    "url": "https://github.com/AndriiTeterka/openclaw-repo-agent/issues"
   },
   "publishConfig": {
     "access": "public"
