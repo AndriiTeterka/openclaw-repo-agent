@@ -104,7 +104,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
-- The runtime image bundles `@openclaw/acpx`, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
+- The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
 
 ## Docker MCP
 

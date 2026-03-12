@@ -18,12 +18,13 @@ bootstrap_provider_auth() {
 
 ensure_acpx_plugin() {
   plugin_manifest="${HOME:-/home/node}/.openclaw/extensions/acpx/openclaw.plugin.json"
-  if [ -f "$plugin_manifest" ]; then
+  bundled_manifest="/app/extensions/acpx/openclaw.plugin.json"
+  if [ -f "$plugin_manifest" ] || [ -f "$bundled_manifest" ]; then
     return
   fi
 
-  echo "Missing preinstalled @openclaw/acpx plugin at $plugin_manifest." >&2
-  echo "Rebuild or update the runtime image before starting OpenClaw." >&2
+  echo "Missing ACPX plugin. Checked $plugin_manifest and $bundled_manifest." >&2
+  echo "Update the OpenClaw base image or rebuild the runtime image before starting OpenClaw." >&2
   exit 1
 }
 

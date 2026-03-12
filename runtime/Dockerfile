@@ -51,8 +51,5 @@ RUN sed -i 's/\r$//' /usr/local/bin/openclaw-entrypoint \
 
 USER node
 
-RUN openclaw plugins install @openclaw/acpx \
- && test -f /home/node/.openclaw/extensions/acpx/openclaw.plugin.json
-
 ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint"]
 CMD ["node", "dist/index.js", "gateway"]
