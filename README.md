@@ -52,10 +52,12 @@ If the default prebuilt runtime image is unavailable, `up` automatically falls b
 
 You can still override the detected repo settings interactively or later in `.openclaw/plugin.json`.
 
-The CLI writes:
+The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
 
-- committed files: `.openclaw/plugin.json`, `.openclaw/instructions.md`, `.openclaw/knowledge.md`, `.openclaw/local.env.example`
-- local-only files: `.openclaw/local.env`, `.openclaw/state/`
+- repo config files: `.openclaw/plugin.json`, `.openclaw/instructions.md`, `.openclaw/knowledge.md`, `.openclaw/local.env.example`
+- local runtime files: `.openclaw/local.env`, `.openclaw/state/`
+
+If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
 
 Configuration precedence:
 
@@ -97,6 +99,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 ## Local Configuration Notes
 
+- `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
 - `.openclaw/local.env` is the user-editable local override file; `.openclaw/state/runtime.env` is generated and should not be edited directly.
 - `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` still live in `.openclaw/local.env` for the OpenClaw runtime, but `init`/`up` mirror them into Docker MCP secrets automatically.
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
@@ -179,4 +182,4 @@ The GitHub Actions workflows in [`.github/workflows`](.github/workflows) are alr
 
 ## Optional Consumer Validation
 
-Consumer repos can validate `.openclaw/plugin.json` with the reusable action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin).
+If a consumer repo chooses to commit `.openclaw/plugin.json`, it can validate that file with the reusable action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin).

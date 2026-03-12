@@ -442,7 +442,7 @@ async function writeEnvFile(filePath, values, header = "") {
 
 async function ensureGitignoreEntries(repoRoot) {
   const gitignorePath = path.join(repoRoot, ".gitignore");
-  const requiredEntries = [".openclaw/local.env", ".openclaw/state/"];
+  const requiredEntries = [".openclaw/"];
   const current = await readTextFile(gitignorePath, "");
   const next = [...requiredEntries.filter((entry) => !current.includes(entry))];
   if (next.length === 0) return false;

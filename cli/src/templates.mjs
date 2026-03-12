@@ -7,7 +7,7 @@ export function defaultInstructionsTemplate(projectName) {
 - Use the repo's configured ACP default agent when ACP-backed inspection, edits, or verification are needed.
 - Keep replies concise in Telegram-style channels and use the configured verification commands after relevant code changes.
 - Treat standalone cancellation messages such as \`stop\`, \`cancel\`, or \`dont fix\` as cancellation at the next tool boundary.
-- Do not commit local-only OpenClaw state or secrets from \`.openclaw/local.env\`.
+- \`.openclaw/\` is git-ignored by default; do not commit local-only OpenClaw state or secrets unless you intentionally unignore selected files.
 - Project name: ${projectName}
 `;
 }
@@ -29,6 +29,7 @@ export function defaultLocalEnvExample(useLocalBuild = false) {
 
   return `# Local-only OpenClaw overrides for this repository.
 # Copy this file to .openclaw/local.env and fill in the required runtime values.
+# .openclaw/ is git-ignored by default.
 # init/up will mirror configured API-style credentials into Docker MCP secrets automatically.
 # TARGET_AUTH_PATH stays here because it is a local host path, not a keychain secret.
 

@@ -72,6 +72,12 @@ test("selectLatestPendingPairingRequest chooses the newest request from common p
   assert.equal(request?.code, "NEWEST99");
 });
 
+test("example consumer repo ignores the full .openclaw directory", async () => {
+  const gitignore = await fs.readFile(path.join(repoRoot, "examples", "custom", ".gitignore"), "utf8");
+
+  assert.match(gitignore, /^\.openclaw\/$/m);
+});
+
 test("config validation upgrades legacy codex repos to codex defaults", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-test-"));
   const repoPath = path.join(tempRoot, "repo");

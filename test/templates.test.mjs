@@ -17,6 +17,7 @@ test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", 
 test("defaultLocalEnvExample documents MCP credential sync", () => {
   const output = defaultLocalEnvExample(false);
 
+  assert.match(output, /\.openclaw\/ is git-ignored by default/);
   assert.match(output, /mirror configured API-style credentials into Docker MCP secrets automatically/);
   assert.match(output, /GITHUB_PERSONAL_ACCESS_TOKEN=/);
 });
