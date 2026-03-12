@@ -22,7 +22,9 @@ ensure_acpx_plugin() {
     return
   fi
 
-  openclaw plugins install @openclaw/acpx
+  echo "Missing preinstalled @openclaw/acpx plugin at $plugin_manifest." >&2
+  echo "Rebuild or update the runtime image before starting OpenClaw." >&2
+  exit 1
 }
 
 render_openclaw_config() {

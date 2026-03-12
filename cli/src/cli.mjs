@@ -656,6 +656,10 @@ async function dockerCompose(context, args, options = {}) {
   return { code, stdout: "", stderr: "" };
 }
 
+async function openclawGatewayCommand(context, args, options = {}) {
+  return await dockerCompose(context, ["exec", "-T", "openclaw-gateway", "openclaw", ...args], options);
+}
+
 async function gatewayRunning(context) {
   try {
     const result = await dockerCompose(context, ["ps", "-q", "openclaw-gateway"], { capture: true });
@@ -1230,9 +1234,9 @@ async function handlePair(context, options) {
   }
 
   if (options.approve) {
-    await dockerCompose(context, ["run", "--rm", "--no-deps", "openclaw-cli", "pairing", "approve", "telegram", options.approve]);
+    await openclawGatewayCommand(context, ["pairing", "approve", "telegram", options.approve]);
   } else {
-    await dockerCompose(context, ["run", "--rm", "--no-deps", "openclaw-cli", "pairing", "list", "telegram"]);
+    await openclawGatewayCommand(context, ["pairing", "list", "telegram"]);
   }
 
   if ((options.allowUser?.length ?? 0) === 0
@@ -1481,7 +1485,7 @@ async function handleDoctor(context, options) {
   );
 
   if (running) {
-    const status = await dockerCompose(context, ["run", "--rm", "--no-deps", "openclaw-cli", "status"], { capture: true });
+    const status = await openclawGatewayCommand(context, ["status"], { capture: true });
     pushCheck(
       results,
       "openclaw-status",
@@ -1490,7 +1494,7 @@ async function handleDoctor(context, options) {
       status.code === 0 ? "" : "Inspect the gateway logs with `docker compose logs -f openclaw-gateway`."
     );
 
-    const channelStatus = await dockerCompose(context, ["run", "--rm", "--no-deps", "openclaw-cli", "channels", "status", "--probe"], { capture: true });
+    const channelStatus = await openclawGatewayCommand(context, ["channels", "status", "--probe"], { capture: true });
     pushCheck(
       results,
       "pairing",
