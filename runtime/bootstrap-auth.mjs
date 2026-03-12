@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import { normalizeAuthMode, normalizeProjectManifest } from "./manifest-contract.mjs";
 import { copyFileIfNewer, ensureDir, fileExists, readJsonFile, safeRunCommand, writeJsonFile } from "./shared.mjs";
 
+function isMissingCodexBinary(stderr = "") {
+  return /ENOENT|not found|is not recognized/i.test(String(stderr ?? "").trim());
+}
+
 function extractJwtPayload(token) {
   const raw = String(token ?? "").trim();
   if (!raw) return null;
@@ -102,7 +106,9 @@ function parseArgs(argv) {
 
 function describeCodexRecovery(context) {
   const steps = [];
-  if (context.sourceAuthExists) {
+  if (context.binaryMissing) {
+    steps.push("Codex CLI is missing inside the runtime image. Rebuild or upgrade openclaw-repo-agent so the container installs @openai/codex.");
+  } else if (context.sourceAuthExists) {
     steps.push("Mounted Codex auth exists, but `codex login status` failed. Re-run your host Codex login or remove the stale auth mount.");
   } else if (context.apiKeyExists) {
     steps.push("OPENAI_API_KEY is available. The gateway can bootstrap Codex with the API key during startup.");
@@ -133,6 +139,7 @@ async function codexAdapter(context, options) {
   const loginStatus = await safeRunCommand(codexBin, ["login", "status"], {
     env: process.env,
   });
+  const binaryMissing = isMissingCodexBinary(loginStatus.stderr || loginStatus.stdout);
   if (loginStatus.code === 0) {
     return {
       ok: true,
@@ -145,8 +152,21 @@ async function codexAdapter(context, options) {
     };
   }
 
+  if (binaryMissing) {
+    return {
+      ok: false,
+      mode: "codex",
+      detail: "Codex CLI is not installed in the runtime image.",
+      recovery: describeCodexRecovery({ binaryMissing, sourceAuthExists, apiKeyExists }),
+      sourceAuthExists,
+      targetAuthExists,
+      apiKeyExists,
+      stderr: loginStatus.stderr || loginStatus.stdout,
+    };
+  }
+
   if (options.probeOnly) {
-    const recovery = describeCodexRecovery({ sourceAuthExists, apiKeyExists });
+    const recovery = describeCodexRecovery({ sourceAuthExists, apiKeyExists, binaryMissing });
     return {
       ok: apiKeyExists,
       mode: "codex",
@@ -218,7 +238,7 @@ async function codexAdapter(context, options) {
     ok: false,
     mode: "codex",
     detail: "Codex CLI is not authenticated.",
-    recovery: describeCodexRecovery({ sourceAuthExists, apiKeyExists }),
+    recovery: describeCodexRecovery({ sourceAuthExists, apiKeyExists, binaryMissing: false }),
     sourceAuthExists,
     targetAuthExists: await fileExists(targetAuthPath),
     apiKeyExists,

@@ -92,7 +92,10 @@ const STRING_FLAGS = new Set([
   "auto-select-family",
   "telegram-bot-token",
   "openai-api-key",
-  "target-auth-path"
+  "target-auth-path",
+  "gateway-url",
+  "gateway-token",
+  "gateway-password"
 ]);
 
 const DEFAULT_STATE_COMPOSE_FILE = "docker-compose.openclaw.yml";
@@ -157,6 +160,17 @@ function defaultRuntimeImage() {
   return `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`;
 }
 
+export function deriveComposeProjectName(repoRoot) {
+  const normalizedRoot = String(repoRoot ?? "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  const basename = path.posix.basename(normalizedRoot) || path.basename(path.resolve(repoRoot));
+  const normalized = String(basename || "openclaw")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const projectName = normalized || "openclaw";
+  return /^[a-z0-9]/.test(projectName) ? projectName.slice(0, 63) : `repo-${projectName}`.slice(0, 63);
+}
+
 function isCodexAgent(value) {
   return String(value ?? "").trim().toLowerCase() === "codex";
 }
@@ -195,6 +209,75 @@ async function detectDefaultCodexAuthPath() {
   }
 
   return "";
+}
+
+function isExternalGatewayPairMode(options) {
+  return Boolean(String(options.gatewayUrl ?? "").trim());
+}
+
+function validateExternalGatewayPairOptions(options) {
+  if (!options.gatewayUrl && (options.gatewayToken || options.gatewayPassword)) {
+    throw new Error("--gateway-token and --gateway-password require --gateway-url.");
+  }
+}
+
+function buildExternalGatewayAuthArgs(options) {
+  const url = String(options.gatewayUrl ?? "").trim();
+  const token = String(options.gatewayToken ?? "").trim();
+  const password = String(options.gatewayPassword ?? "").trim();
+  const args = [];
+  if (url) args.push("--url", url);
+  if (token) args.push("--token", token);
+  if (password) args.push("--password", password);
+  return args;
+}
+
+function normalizePendingPairingRequests(payload) {
+  const visited = new Set();
+
+  function collect(value) {
+    if (!value || typeof value !== "object") return [];
+    if (visited.has(value)) return [];
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      return value.flatMap((entry) => collect(entry));
+    }
+
+    const code = String(value.code ?? value.pairingCode ?? value.pairing_code ?? "").trim();
+    if (code) {
+      return [{
+        code,
+        requestedAt: String(value.requestedAt ?? value.requested ?? value.createdAt ?? value.created_at ?? "").trim(),
+        raw: value
+      }];
+    }
+
+    return Object.values(value).flatMap((entry) => collect(entry));
+  }
+
+  return collect(payload);
+}
+
+export function selectLatestPendingPairingRequest(payload) {
+  const requests = normalizePendingPairingRequests(payload);
+  if (requests.length === 0) return null;
+
+  let bestIndex = 0;
+  let bestTimestamp = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < requests.length; index += 1) {
+    const timestamp = Date.parse(requests[index].requestedAt);
+    if (!Number.isNaN(timestamp) && timestamp >= bestTimestamp) {
+      bestIndex = index;
+      bestTimestamp = timestamp;
+      continue;
+    }
+    if (Number.isNaN(timestamp) && bestTimestamp === Number.NEGATIVE_INFINITY) {
+      bestIndex = index;
+    }
+  }
+
+  return requests[bestIndex];
 }
 
 function compareVersions(left, right) {
@@ -634,6 +717,8 @@ function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCod
     : context.paths.emptyAuthDir;
 
   return {
+    OPENCLAW_COMPOSE_PROJECT_NAME: context.composeProjectName,
+    OPENCLAW_GATEWAY_CONTAINER_NAME: context.composeProjectName,
     OPENCLAW_PRODUCT_ROOT: toDockerPath(context.productRoot),
     OPENCLAW_STACK_IMAGE: localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage(),
     OPENCLAW_IMAGE: localEnv.OPENCLAW_IMAGE || DEFAULT_OPENCLAW_IMAGE,
@@ -708,10 +793,37 @@ async function runLiveCommand(command, args, options = {}) {
 }
 
 async function dockerCompose(context, args, options = {}) {
-  const commandArgs = ["compose", "-f", context.paths.composeFile, "--env-file", context.paths.runtimeEnvFile, ...args];
+  const commandArgs = [
+    "compose",
+    "--project-name",
+    context.composeProjectName,
+    "-f",
+    context.paths.composeFile,
+    "--env-file",
+    context.paths.runtimeEnvFile,
+    ...args
+  ];
   if (options.capture) return await safeRunCommand("docker", commandArgs, { cwd: context.repoRoot });
   const code = await runLiveCommand("docker", commandArgs, { cwd: context.repoRoot });
   if (code !== 0) throw new Error(`docker compose ${args.join(" ")} failed with exit code ${code}`);
+  return { code, stdout: "", stderr: "" };
+}
+
+async function openclawHostCommand(context, args, options = {}) {
+  if (options.capture) {
+    return await safeRunCommand("openclaw", args, { cwd: context.repoRoot });
+  }
+  let code = 1;
+  try {
+    code = await runLiveCommand("openclaw", args, { cwd: context.repoRoot });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/not found|is not recognized|ENOENT/i.test(message)) {
+      throw new Error("Host OpenClaw CLI is required for --gateway-url pairing. Install `openclaw` locally and retry.");
+    }
+    throw error;
+  }
+  if (code !== 0) throw new Error(`openclaw ${args.join(" ")} failed with exit code ${code}`);
   return { code, stdout: "", stderr: "" };
 }
 
@@ -1042,7 +1154,7 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
       verificationCommands = verificationCommandsInput ? verificationCommandsInput.split(/\s*,\s*/g) : plugin.verificationCommands;
     }
 
-    const acpDefaultAgent = await promptRequired(rl, "ACP default agent", plugin.acp.defaultAgent);
+    const acpDefaultAgent = await promptRequired(rl, "ACP default agent", plugin.acp.defaultAgent || "codex");
     const defaultAuthMode = shouldUpgradeLegacyCodexBootstrap({
       cliAuthMode: options.authMode,
       localEnvAuthMode: existingLocalEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE,
@@ -1073,11 +1185,11 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
     let openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
     let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "") || detectedCodexAuthPath;
     if (authMode === "codex") {
-      if (!openAiApiKey) {
-        openAiApiKey = (await rl.question("OpenAI API key: ")).trim();
-      }
       if (!targetAuthPath) {
         targetAuthPath = (await rl.question("Codex auth path: ")).trim();
+      }
+      if (!targetAuthPath && !openAiApiKey) {
+        openAiApiKey = (await rl.question("OpenAI API key (optional if Codex auth is already configured elsewhere): ")).trim();
       }
     }
 
@@ -1297,16 +1409,80 @@ async function handleVerify(context, options) {
   }
 }
 
-async function handlePair(context, options) {
-  await prepareState(context, options);
-  if (!(await gatewayRunning(context))) {
-    throw new Error("OpenClaw gateway is not running. Start it with openclaw-repo-agent up first.");
+async function autoApproveLocalTelegramPair(context) {
+  const pendingResult = await openclawGatewayCommand(context, ["pairing", "list", "telegram", "--json"], { capture: true });
+  if (pendingResult.code !== 0) {
+    throw new Error(pendingResult.stderr.trim() || pendingResult.stdout.trim() || "Failed to read Telegram pairing requests.");
   }
 
-  if (options.approve) {
-    await openclawGatewayCommand(context, ["pairing", "approve", "telegram", options.approve]);
-  } else {
+  let payload = null;
+  try {
+    payload = JSON.parse(pendingResult.stdout || "null");
+  } catch {
+    payload = null;
+  }
+
+  const request = selectLatestPendingPairingRequest(payload);
+  if (!request?.code) {
     await openclawGatewayCommand(context, ["pairing", "list", "telegram"]);
+    return false;
+  }
+
+  console.log(`Auto-approving latest Telegram pairing request: ${request.code}`);
+  await openclawGatewayCommand(context, ["pairing", "approve", "telegram", request.code]);
+  return true;
+}
+
+async function handleExternalGatewayPair(context, options) {
+  const gatewayArgs = buildExternalGatewayAuthArgs(options);
+  if (options.approve) {
+    await openclawHostCommand(context, ["devices", "approve", options.approve, ...gatewayArgs]);
+    return;
+  }
+
+  const approveLatest = await openclawHostCommand(context, ["devices", "approve", "--latest", ...gatewayArgs], { capture: true });
+  if (approveLatest.code === 0) {
+    const output = approveLatest.stdout.trim() || approveLatest.stderr.trim() || "Approved the latest pending external device pairing request.";
+    console.log(output);
+    return;
+  }
+
+  const list = await openclawHostCommand(context, ["devices", "list", ...(options.json ? ["--json"] : []), ...gatewayArgs], { capture: true });
+  if (list.code === 0) {
+    console.log("No external device pairing request was auto-approved.");
+    const output = list.stdout.trim() || list.stderr.trim();
+    if (output) console.log(output);
+    return;
+  }
+
+  const reason = approveLatest.stderr.trim()
+    || approveLatest.stdout.trim()
+    || list.stderr.trim()
+    || list.stdout.trim()
+    || "Failed to pair against the external OpenClaw gateway.";
+  if (/not found|is not recognized|ENOENT/i.test(reason)) {
+    throw new Error("Host OpenClaw CLI is required for --gateway-url pairing. Install `openclaw` locally and retry.");
+  }
+  throw new Error(reason);
+}
+
+async function handlePair(context, options) {
+  validateExternalGatewayPairOptions(options);
+  await prepareState(context, options);
+  const localEnv = await readEnvFile(context.paths.localEnvFile);
+
+  if (isExternalGatewayPairMode(options)) {
+    await handleExternalGatewayPair(context, options);
+  } else {
+    if (!(await gatewayRunning(context))) {
+      throw new Error("OpenClaw gateway is not running. Start it with openclaw-repo-agent up first.");
+    }
+
+    if (options.approve) {
+      await openclawGatewayCommand(context, ["pairing", "approve", "telegram", options.approve]);
+    } else {
+      await autoApproveLocalTelegramPair(context);
+    }
   }
 
   if ((options.allowUser?.length ?? 0) === 0
@@ -1316,7 +1492,6 @@ async function handlePair(context, options) {
     return;
   }
 
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
   localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM = JSON.stringify(normalizePrincipalArray([
     ...parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []),
     ...(options.allowUser ?? [])
@@ -1735,7 +1910,7 @@ Commands:
   init             Initialize or refresh .openclaw files in a repository
   up               Start the local OpenClaw stack
   down             Stop the local OpenClaw stack
-  pair             List or approve Telegram pairing requests
+  pair             Auto-approve local Telegram pairing or external device pairing
   doctor           Check local prerequisites and gateway health
   verify           Run configured verification commands in the gateway
   status           Show rendered manifest and runtime status
@@ -1760,6 +1935,8 @@ Examples:
   ${PRODUCT_NAME} init --repo-root /path/to/repo
   ${PRODUCT_NAME} status --check-updates
   ${PRODUCT_NAME} doctor --fix --verify
+  ${PRODUCT_NAME} pair
+  ${PRODUCT_NAME} pair --gateway-url ws://gateway.example/ws --gateway-token <token>
   ${PRODUCT_NAME} mcp setup
   ${PRODUCT_NAME} mcp connect
 `);
@@ -1782,6 +1959,7 @@ export async function main(argv) {
   const context = {
     repoRoot,
     productRoot,
+    composeProjectName: deriveComposeProjectName(repoRoot),
     paths: resolvePaths(repoRoot),
     detection: await detectRepository(repoRoot)
   };

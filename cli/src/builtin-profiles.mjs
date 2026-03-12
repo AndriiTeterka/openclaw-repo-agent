@@ -1,5 +1,5 @@
 export const PRODUCT_NAME = "openclaw-repo-agent";
-export const PRODUCT_VERSION = "0.1.4";
+export const PRODUCT_VERSION = "0.1.5";
 export const DEFAULT_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/andriiteterka/openclaw-repo-agent-runtime";
 export const DEFAULT_OPENCLAW_IMAGE = "ghcr.io/openclaw/openclaw:latest";
 export const DEFAULT_NPM_PACKAGE_NAME = PRODUCT_NAME;
@@ -24,7 +24,7 @@ const STABLE_TELEGRAM_DEFAULTS = {
 };
 
 const STABLE_ACP_DEFAULTS = {
-  defaultAgent: "",
+  defaultAgent: "codex",
   allowedAgents: [],
   preferredMode: "oneshot",
   maxConcurrentSessions: 4,
@@ -52,7 +52,7 @@ const STABLE_AGENT_DEFAULTS = {
 };
 
 const STABLE_SECURITY_DEFAULTS = {
-  authBootstrapMode: "external",
+  authBootstrapMode: "codex",
   commandLoggerEnabled: true,
   toolDeny: ["process"]
 };

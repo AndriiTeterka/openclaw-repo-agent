@@ -189,6 +189,7 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
 services:
   openclaw-gateway:
     <<: *openclaw-common
+    container_name: \${OPENCLAW_GATEWAY_CONTAINER_NAME}
     restart: unless-stopped
     ports:
       - "127.0.0.1:\${OPENCLAW_GATEWAY_PORT}:18789"

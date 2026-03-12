@@ -29,7 +29,8 @@ RUN apt-get update \
  && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
 
-RUN if [ -n "${OPENCLAW_AGENT_NPM_PACKAGES}" ]; then npm install --global ${OPENCLAW_AGENT_NPM_PACKAGES}; fi \
+RUN npm install --global @openai/codex \
+ && if [ -n "${OPENCLAW_AGENT_NPM_PACKAGES}" ]; then npm install --global ${OPENCLAW_AGENT_NPM_PACKAGES}; fi \
  && npm cache clean --force \
  && if [ -n "${OPENCLAW_AGENT_INSTALL_COMMAND}" ]; then sh -lc "${OPENCLAW_AGENT_INSTALL_COMMAND}"; fi
 

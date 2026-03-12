@@ -6,6 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
+import { deriveComposeProjectName, selectLatestPendingPairingRequest } from "../cli/src/cli.mjs";
+
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(".");
 const cliPath = path.resolve("cli/bin/openclaw-repo-agent.mjs");
@@ -34,7 +36,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.1.4");
+  assert.equal(stdout.trim(), "0.1.5");
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -51,7 +53,23 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.1.4");
+  assert.equal(payload.productVersion, "0.1.5");
+});
+
+test("deriveComposeProjectName uses the repo directory slug", () => {
+  assert.equal(deriveComposeProjectName("C:\\Users\\ateterka\\appium-test-project"), "appium-test-project");
+  assert.equal(deriveComposeProjectName("C:\\Users\\ateterka\\Repo With Spaces"), "repo-with-spaces");
+});
+
+test("selectLatestPendingPairingRequest chooses the newest request from common payload shapes", () => {
+  const request = selectLatestPendingPairingRequest({
+    requests: [
+      { code: "OLDER123", requested: "2026-03-12T14:47:37.222Z" },
+      { code: "NEWEST99", requestedAt: "2026-03-12T15:47:37.222Z" }
+    ]
+  });
+
+  assert.equal(request?.code, "NEWEST99");
 });
 
 test("config validation upgrades legacy codex repos to codex defaults", async () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { defaultLocalEnvExample, renderDockerMcpConfigTemplate } from "../cli/src/templates.mjs";
+import { defaultLocalEnvExample, renderComposeTemplate, renderDockerMcpConfigTemplate } from "../cli/src/templates.mjs";
 
 test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", () => {
   const output = renderDockerMcpConfigTemplate("C:/Users/demo/workspace/repo");
@@ -19,4 +19,10 @@ test("defaultLocalEnvExample documents MCP credential sync", () => {
 
   assert.match(output, /mirror configured API-style credentials into Docker MCP secrets automatically/);
   assert.match(output, /GITHUB_PERSONAL_ACCESS_TOKEN=/);
+});
+
+test("renderComposeTemplate pins the gateway container name from runtime env", () => {
+  const output = renderComposeTemplate({ useLocalBuild: false });
+
+  assert.match(output, /container_name: \$\{OPENCLAW_GATEWAY_CONTAINER_NAME\}/);
 });

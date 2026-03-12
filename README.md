@@ -69,7 +69,7 @@ Configuration precedence:
 - `init`: bootstrap or refresh `.openclaw` files for a repository
 - `up`: render runtime state and start the local OpenClaw stack
 - `down`: stop the local stack
-- `pair`: list or approve Telegram pairing requests and update local allowlists
+- `pair`: auto-approve the latest pending local Telegram DM pairing request, or switch to external device pairing when `--gateway-url` is supplied
 - `status`: show effective runtime settings and optionally check npm for updates
 - `doctor`: validate Docker, auth, render status, gateway health, and Telegram readiness
 - `verify`: run configured verification commands inside the gateway container
@@ -87,12 +87,13 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - Runtime profile: `stable-chat`
 - Queue profile: `stable-chat`
 - ACP backend: `acpx`
+- ACP default agent: `codex`
 - Telegram DM policy: `pairing`
 - Telegram group policy: `disabled`
-- Auth bootstrap mode: `external`
+- Auth bootstrap mode: `codex`
 - Denied tool: `process`
 
-`codex` auth bootstrap remains available as an explicit opt-in mode. When enabled, users must provide their own Codex-compatible runtime install and auth inputs.
+`codex` is the default ACP and bootstrap path now. The CLI prefers an existing Codex login under `CODEX_HOME` or `~/.codex`, and only falls back to prompting for an API key when no local Codex auth path is available.
 
 ## Local Configuration Notes
 
@@ -102,6 +103,8 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - Telegram stream mode is configured with `OPENCLAW_TELEGRAM_STREAM_MODE` in `.openclaw/local.env`.
 - `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains local because it is a host path, not a keychain secret.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
+- The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
+- The main gateway container name now matches the repo directory slug, so Docker Desktop is easier to scan when you have more than one repo.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
@@ -124,6 +127,16 @@ What this does:
 - points Docker MCP at `.openclaw/state/docker-mcp.config.yaml`
 - connects Codex to `docker mcp gateway run`
 - mirrors configured `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and optional `GITHUB_PERSONAL_ACCESS_TOKEN` into Docker MCP secrets
+
+External pairing:
+
+```bash
+npx openclaw-repo-agent pair --gateway-url ws://gateway.example/ws --gateway-token <token>
+```
+
+- This path uses the host `openclaw devices ...` commands instead of the repo-local container.
+- `--gateway-url` should be the OpenClaw gateway WebSocket URL, not a browser dashboard URL.
+- If you omit `--approve`, the CLI approves the latest pending external device request automatically.
 
 Notes:
 
