@@ -40,16 +40,15 @@ npx openclaw-repo-agent pair
 
 `init` and `up` now automatically enforce the required Docker MCP setup for the current repo, reconnect Codex if needed, and sync configured credentials into Docker MCP secrets.
 
-`init` prompts for:
+`init` auto-detects repo-derived settings first, including project name, tooling profile, instruction files, knowledge files, and verification commands. The interactive flow mainly asks for user-specific inputs such as:
 
-- project name
-- tooling, deployment, runtime, and queue profiles
-- ACP default agent and optional allowed agents
+- ACP default agent
 - auth mode
-- Telegram bot token
+- Telegram bot token when it is not already configured
 - Telegram DM and group policy
-- optional Telegram allowlists
-- optional verification commands
+- Telegram allowlists only when the chosen policy needs them
+
+You can still override the detected repo settings interactively or later in `.openclaw/plugin.json`.
 
 The CLI writes:
 

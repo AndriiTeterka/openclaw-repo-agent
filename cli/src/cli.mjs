@@ -43,6 +43,7 @@ import {
   hashDockerMcpSecretValue,
   summarizeDockerMcpSecretPlan
 } from "./docker-mcp.mjs";
+import { detectRepository } from "./repository-detection.mjs";
 
 const ARRAY_FLAGS = new Set([
   "instruction-file",
@@ -323,69 +324,6 @@ async function ensureGitignoreEntries(repoRoot) {
   return true;
 }
 
-async function detectRepository(repoRoot) {
-  const markerEntries = [
-    ["gradlew", "gradlew"],
-    ["buildGradle", "build.gradle"],
-    ["settingsGradle", "settings.gradle"],
-    ["pomXml", "pom.xml"],
-    ["packageJson", "package.json"],
-    ["pyproject", "pyproject.toml"],
-    ["requirements", "requirements.txt"],
-    ["goMod", "go.mod"]
-  ];
-  const markers = Object.fromEntries(await Promise.all(markerEntries.map(async ([key, relativePath]) => [
-    key,
-    await fileExists(path.join(repoRoot, relativePath))
-  ])));
-
-  const signals = [];
-  if (markers.gradlew || markers.buildGradle || markers.settingsGradle || markers.pomXml) signals.push("java17");
-  if (markers.packageJson) signals.push("node20");
-  if (markers.pyproject || markers.requirements) signals.push("python311");
-  if (markers.goMod) signals.push("go122");
-
-  const toolingProfile = signals.length > 1 ? "polyglot" : signals[0] ?? "none";
-  const [hasAgentsInstructions, hasReadme, hasProjectKnowledge] = await Promise.all([
-    fileExists(path.join(repoRoot, "AGENTS.md")),
-    fileExists(path.join(repoRoot, "README.md")),
-    fileExists(path.join(repoRoot, "docs", "openclaw-project-knowledge.md"))
-  ]);
-
-  const instructionCandidates = [];
-  if (hasAgentsInstructions) instructionCandidates.push("AGENTS.md");
-  if (hasReadme) instructionCandidates.push("README.md");
-  instructionCandidates.push(".openclaw/instructions.md");
-
-  const knowledgeCandidates = [".openclaw/knowledge.md"];
-  if (hasProjectKnowledge) {
-    knowledgeCandidates.push("docs/openclaw-project-knowledge.md");
-  }
-
-  const verificationCommands = [];
-  if (signals.includes("java17")) {
-    if (markers.gradlew) verificationCommands.push("./gradlew build");
-    else if (markers.pomXml) verificationCommands.push("mvn test");
-  }
-  if (signals.includes("node20")) {
-    verificationCommands.push("npm run build --if-present", "npm test --if-present");
-  }
-  if (signals.includes("python311")) {
-    verificationCommands.push("python -m pytest");
-  }
-  if (signals.includes("go122")) {
-    verificationCommands.push("go test ./...");
-  }
-
-  return {
-    profile: "custom",
-    toolingProfile,
-    instructionCandidates: uniqueStrings(instructionCandidates),
-    knowledgeCandidates: uniqueStrings(knowledgeCandidates),
-    verificationCommands: uniqueStrings(verificationCommands)
-  };
-}
-
 function cloneProfile(profileName) {
   return deepMerge(BUILTIN_PROFILES[profileName] ?? BUILTIN_PROFILES.custom);
 }
@@ -414,7 +352,8 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
       ? rawConfig.verificationCommands
       : [...detection.verificationCommands, ...profileDefaults.verificationCommands];
 
-  const projectName = String(options.projectName ?? merged.projectName ?? path.basename(repoRoot)).trim() || path.basename(repoRoot);
+  const detectedProjectName = detection.projectName || path.basename(repoRoot);
+  const projectName = String(options.projectName ?? merged.projectName ?? detectedProjectName).trim() || detectedProjectName;
   const deploymentProfile = String(options.deploymentProfile ?? merged.deploymentProfile ?? defaultDeploymentProfile()).trim() || defaultDeploymentProfile();
   const runtimeProfile = String(options.runtimeProfile ?? merged.runtimeProfile ?? "stable-chat").trim() || "stable-chat";
   const queueProfile = String(options.queueProfile ?? merged.queueProfile ?? runtimeProfile).trim() || runtimeProfile;
@@ -942,6 +881,14 @@ function parsePromptPrincipals(value, fallback = []) {
   return normalizePrincipalArray(parseFlexibleArray(value, fallback));
 }
 
+function formatPromptList(values) {
+  return values.length > 0 ? values.join(", ") : "(none)";
+}
+
+function shouldPromptForAllowlist(policy, currentValues) {
+  return policy === "allowlist" || currentValues.length > 0;
+}
+
 async function promptForInit(context, plugin, existingLocalEnv, options) {
   if (options.yes || options.nonInteractive || !process.stdin.isTTY || !process.stdout.isTTY) {
     return { plugin, localEnv: {} };
@@ -953,45 +900,82 @@ async function promptForInit(context, plugin, existingLocalEnv, options) {
   });
 
   try {
-    const projectName = (await rl.question(`Project name [${plugin.projectName}]: `)).trim() || plugin.projectName;
-    const availableProfiles = listBuiltinProfileNames().join(", ");
-    const profile = (await rl.question(`Preset profile [${plugin.profile}] (${availableProfiles}): `)).trim() || plugin.profile;
-    const toolingProfile = (await rl.question(`Tooling profile [${plugin.toolingProfile}]: `)).trim() || plugin.toolingProfile;
-    const deploymentProfile = (await rl.question(`Deployment profile [${plugin.deploymentProfile}]: `)).trim() || plugin.deploymentProfile;
-    const runtimeProfile = (await rl.question(`Runtime profile [${plugin.runtimeProfile}]: `)).trim() || plugin.runtimeProfile;
-    const queueProfile = (await rl.question(`Queue profile [${plugin.queueProfile}]: `)).trim() || plugin.queueProfile;
+    console.log("Detected repo settings:");
+    console.log(`- Project: ${plugin.projectName}`);
+    console.log(`- Tooling profile: ${plugin.toolingProfile}`);
+    console.log(`- Deployment profile: ${plugin.deploymentProfile}`);
+    console.log(`- Runtime profile: ${plugin.runtimeProfile}`);
+    console.log(`- Queue profile: ${plugin.queueProfile}`);
+    console.log(`- Instruction files: ${formatPromptList(plugin.instructionFiles)}`);
+    console.log(`- Knowledge files: ${formatPromptList(plugin.knowledgeFiles)}`);
+    console.log(`- Verification commands: ${formatPromptList(plugin.verificationCommands)}`);
+    console.log("Use CLI flags or edit .openclaw/plugin.json later if you need to override these.");
+
+    const customizeDetectedSettings = parseBooleanString(
+      (await rl.question("Override detected repo settings now [no]: ")).trim(),
+      false
+    );
+
+    let projectName = plugin.projectName;
+    let profile = plugin.profile;
+    let toolingProfile = plugin.toolingProfile;
+    let deploymentProfile = plugin.deploymentProfile;
+    let runtimeProfile = plugin.runtimeProfile;
+    let queueProfile = plugin.queueProfile;
+    let instructionFiles = plugin.instructionFiles;
+    let knowledgeFiles = plugin.knowledgeFiles;
+    let verificationCommands = plugin.verificationCommands;
+
+    if (customizeDetectedSettings) {
+      if (listBuiltinProfileNames().length > 1) {
+        const availableProfiles = listBuiltinProfileNames().join(", ");
+        profile = (await rl.question(`Preset profile [${plugin.profile}] (${availableProfiles}): `)).trim() || plugin.profile;
+      }
+      projectName = (await rl.question(`Project name [${plugin.projectName}]: `)).trim() || plugin.projectName;
+      toolingProfile = (await rl.question(`Tooling profile [${plugin.toolingProfile}]: `)).trim() || plugin.toolingProfile;
+      deploymentProfile = (await rl.question(`Deployment profile [${plugin.deploymentProfile}]: `)).trim() || plugin.deploymentProfile;
+      runtimeProfile = (await rl.question(`Runtime profile [${plugin.runtimeProfile}]: `)).trim() || plugin.runtimeProfile;
+      queueProfile = (await rl.question(`Queue profile [${plugin.queueProfile}]: `)).trim() || plugin.queueProfile;
+      const instructionFilesInput = (await rl.question(`Instruction files [${plugin.instructionFiles.join(", ")}]: `)).trim();
+      const knowledgeFilesInput = (await rl.question(`Knowledge files [${plugin.knowledgeFiles.join(", ")}]: `)).trim();
+      const verificationCommandsInput = (await rl.question(`Verification commands [${plugin.verificationCommands.join(", ")}]: `)).trim();
+      instructionFiles = instructionFilesInput ? instructionFilesInput.split(/\s*,\s*/g) : plugin.instructionFiles;
+      knowledgeFiles = knowledgeFilesInput ? knowledgeFilesInput.split(/\s*,\s*/g) : plugin.knowledgeFiles;
+      verificationCommands = verificationCommandsInput ? verificationCommandsInput.split(/\s*,\s*/g) : plugin.verificationCommands;
+    }
+
     const authMode = (await rl.question(`Auth mode [${plugin.security.authBootstrapMode}]: `)).trim() || plugin.security.authBootstrapMode;
     const acpDefaultAgent = await promptRequired(rl, "ACP default agent", plugin.acp.defaultAgent);
-    const allowedAgentsDefault = plugin.acp.allowedAgents.length > 0 ? plugin.acp.allowedAgents.join(", ") : acpDefaultAgent;
-    const allowedAgentsInput = (await rl.question(`ACP allowed agents [${allowedAgentsDefault}]: `)).trim();
-    const instructionFiles = (await rl.question(`Instruction files [${plugin.instructionFiles.join(", ")}]: `)).trim();
-    const knowledgeFiles = (await rl.question(`Knowledge files [${plugin.knowledgeFiles.join(", ")}]: `)).trim();
-    const verificationCommandsInput = (await rl.question(`Verification commands [${plugin.verificationCommands.join(", ")}]: `)).trim();
     const dmPolicy = (await rl.question(`Telegram DM policy [${plugin.telegram.dmPolicy}]: `)).trim() || plugin.telegram.dmPolicy;
     const groupPolicy = (await rl.question(`Telegram group policy [${plugin.telegram.groupPolicy}]: `)).trim() || plugin.telegram.groupPolicy;
 
     const currentAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []);
     const currentGroupAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []);
-    const allowUsersInput = (await rl.question(`Telegram DM allowlist [${currentAllowUsers.join(", ")}]: `)).trim();
-    const groupAllowUsersInput = (await rl.question(`Telegram group allowlist [${currentGroupAllowUsers.join(", ")}]: `)).trim();
+    const allowUsersInput = shouldPromptForAllowlist(dmPolicy, currentAllowUsers)
+      ? (await rl.question(`Telegram DM allowlist [${currentAllowUsers.join(", ")}]: `)).trim()
+      : "";
+    const groupAllowUsersInput = shouldPromptForAllowlist(groupPolicy, currentGroupAllowUsers)
+      ? (await rl.question(`Telegram group allowlist [${currentGroupAllowUsers.join(", ")}]: `)).trim()
+      : "";
 
     const hasTelegramToken = Boolean(existingLocalEnv.TELEGRAM_BOT_TOKEN) && !String(existingLocalEnv.TELEGRAM_BOT_TOKEN).startsWith("replace-with-");
     const telegramTokenHint = hasTelegramToken ? "configured" : "replace-with-your-botfather-token";
-    const telegramBotTokenInput = (await rl.question(`Telegram bot token [${telegramTokenHint}]: `)).trim();
+    const telegramBotTokenInput = hasTelegramToken
+      ? ""
+      : (await rl.question(`Telegram bot token [${telegramTokenHint}]: `)).trim();
 
-    let openAiApiKey = "";
-    let targetAuthPath = "";
+    let openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
+    let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "");
     if (authMode === "codex") {
-      const apiKeyHint = existingLocalEnv.OPENAI_API_KEY ? "configured" : "";
-      openAiApiKey = (await rl.question(`OpenAI API key${apiKeyHint ? ` [${apiKeyHint}]` : ""}: `)).trim() || String(existingLocalEnv.OPENAI_API_KEY ?? "");
-      targetAuthPath = (await rl.question(`Codex auth path [${String(existingLocalEnv.TARGET_AUTH_PATH ?? "")}]: `)).trim() || String(existingLocalEnv.TARGET_AUTH_PATH ?? "");
+      if (!openAiApiKey) {
+        openAiApiKey = (await rl.question("OpenAI API key: ")).trim();
+      }
+      if (!targetAuthPath) {
+        targetAuthPath = (await rl.question("Codex auth path: ")).trim();
+      }
     }
 
-    const verificationCommands = verificationCommandsInput ? verificationCommandsInput.split(/\s*,\s*/g) : plugin.verificationCommands;
-    const acpAllowedAgents = normalizeAllowedAgents(
-      acpDefaultAgent,
-      allowedAgentsInput ? allowedAgentsInput.split(/\s*,\s*/g) : plugin.acp.allowedAgents
-    );
+    const acpAllowedAgents = normalizeAllowedAgents(acpDefaultAgent, plugin.acp.allowedAgents);
 
     const nextPlugin = normalizePluginConfig({
       ...plugin,
@@ -1029,8 +1013,8 @@ async function promptForInit(context, plugin, existingLocalEnv, options) {
       acpAllowedAgent: acpAllowedAgents,
       dmPolicy,
       groupPolicy,
-      instructionFile: instructionFiles ? instructionFiles.split(/\s*,\s*/g) : plugin.instructionFiles,
-      knowledgeFile: knowledgeFiles ? knowledgeFiles.split(/\s*,\s*/g) : plugin.knowledgeFiles,
+      instructionFile: instructionFiles,
+      knowledgeFile: knowledgeFiles,
       verificationCommand: verificationCommands
     });
 
@@ -1038,8 +1022,16 @@ async function promptForInit(context, plugin, existingLocalEnv, options) {
       plugin: nextPlugin,
       localEnv: {
         TELEGRAM_BOT_TOKEN: telegramBotTokenInput || (hasTelegramToken ? existingLocalEnv.TELEGRAM_BOT_TOKEN : "replace-with-your-botfather-token"),
-        OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(parsePromptPrincipals(allowUsersInput, currentAllowUsers)),
-        OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(parsePromptPrincipals(groupAllowUsersInput, currentGroupAllowUsers)),
+        OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(
+          shouldPromptForAllowlist(dmPolicy, currentAllowUsers)
+            ? parsePromptPrincipals(allowUsersInput, currentAllowUsers)
+            : currentAllowUsers
+        ),
+        OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(
+          shouldPromptForAllowlist(groupPolicy, currentGroupAllowUsers)
+            ? parsePromptPrincipals(groupAllowUsersInput, currentGroupAllowUsers)
+            : currentGroupAllowUsers
+        ),
         OPENAI_API_KEY: authMode === "codex" ? openAiApiKey : "",
         TARGET_AUTH_PATH: authMode === "codex" && targetAuthPath ? toDockerPath(path.resolve(targetAuthPath)) : ""
       }
