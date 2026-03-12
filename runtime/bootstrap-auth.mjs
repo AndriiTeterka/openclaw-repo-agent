@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { normalizeAuthMode, normalizeProjectManifest } from "./manifest-contract.mjs";
-import { copyFileIfNewer, ensureDir, fileExists, readJsonFile, runCommand, writeJsonFile } from "./shared.mjs";
+import { copyFileIfNewer, ensureDir, fileExists, readJsonFile, safeRunCommand, writeJsonFile } from "./shared.mjs";
 
 function extractJwtPayload(token) {
   const raw = String(token ?? "").trim();
@@ -91,18 +91,6 @@ async function syncOpenAiApiKeyProfiles(apiKey, agentDirs) {
   }
 
   return true;
-}
-
-async function safeRunCommand(command, args, options = {}) {
-  try {
-    return await runCommand(command, args, options);
-  } catch (error) {
-    return {
-      code: 1,
-      stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
-    };
-  }
 }
 
 function parseArgs(argv) {

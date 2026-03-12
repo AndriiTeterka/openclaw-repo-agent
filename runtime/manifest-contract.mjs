@@ -384,7 +384,10 @@ export function buildOpenClawConfig(manifest, env = process.env) {
 
   const telegramDmPolicy = nonEmptyString(env.OPENCLAW_TELEGRAM_DM_POLICY, manifest.telegram.dmPolicy);
   const telegramGroupPolicy = nonEmptyString(env.OPENCLAW_TELEGRAM_GROUP_POLICY, manifest.telegram.groupPolicy);
-  const telegramStreamMode = nonEmptyString(env.OPENCLAW_TELEGRAM_STREAMING, manifest.telegram.streamMode);
+  const telegramStreamMode = nonEmptyString(
+    env.OPENCLAW_TELEGRAM_STREAM_MODE,
+    nonEmptyString(env.OPENCLAW_TELEGRAM_STREAMING, manifest.telegram.streamMode),
+  );
   const telegramBlockStreaming = resolveBoolean(env.OPENCLAW_TELEGRAM_BLOCK_STREAMING, manifest.telegram.blockStreaming);
   const telegramReplyToMode = nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, manifest.telegram.replyToMode);
   const telegramReactionLevel = nonEmptyString(env.OPENCLAW_TELEGRAM_REACTION_LEVEL, manifest.telegram.reactionLevel);

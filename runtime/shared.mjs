@@ -188,3 +188,15 @@ export async function runCommand(command, args, options = {}) {
     else child.stdin.end();
   });
 }
+
+export async function safeRunCommand(command, args, options = {}) {
+  try {
+    return await runCommand(command, args, options);
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

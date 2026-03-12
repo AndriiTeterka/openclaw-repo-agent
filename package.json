@@ -39,7 +39,8 @@
   ],
   "scripts": {
     "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",
+    "test:unit": "node --test",
     "pack:dry-run": "npm pack --dry-run",
-    "test": "npm run check && npm run pack:dry-run"
+    "test": "npm run test:unit && npm run check && npm run pack:dry-run"
   }
 }
