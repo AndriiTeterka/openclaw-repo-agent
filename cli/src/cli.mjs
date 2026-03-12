@@ -47,6 +47,20 @@ import {
 } from "./docker-mcp.mjs";
 import { detectRepository } from "./repository-detection.mjs";
 import { buildLocalRuntimeEnvOverrides, shouldAutoUseLocalBuild } from "./runtime-image.mjs";
+import {
+  allocateGatewayPort,
+  buildInstanceMetadata,
+  buildRegistryEntry,
+  deriveComposeProjectName as deriveComposeProjectNameFromInstance,
+  fingerprintTelegramBotToken,
+  LEGACY_COMPOSE_PORT,
+  LEGACY_LOCAL_RUNTIME_IMAGE,
+  listInstanceRegistryEntries,
+  readInstanceRegistry,
+  resolveInstanceRegistryPath,
+  shouldManageGatewayPort,
+  upsertInstanceRegistryEntry
+} from "./instance-registry.mjs";
 
 const ARRAY_FLAGS = new Set([
   "instruction-file",
@@ -66,6 +80,7 @@ const BOOLEAN_FLAGS = new Set([
   "topic-acp",
   "check-updates",
   "use-local-build",
+  "reassign-port",
   "force"
 ]);
 
@@ -161,14 +176,66 @@ function defaultRuntimeImage() {
 }
 
 export function deriveComposeProjectName(repoRoot) {
-  const normalizedRoot = String(repoRoot ?? "").replace(/\\/g, "/").replace(/\/+$/g, "");
-  const basename = path.posix.basename(normalizedRoot) || path.basename(path.resolve(repoRoot));
-  const normalized = String(basename || "openclaw")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const projectName = normalized || "openclaw";
-  return /^[a-z0-9]/.test(projectName) ? projectName.slice(0, 63) : `repo-${projectName}`.slice(0, 63);
+  return deriveComposeProjectNameFromInstance(repoRoot);
+}
+
+function formatLegacyRuntimeImageWarning(context, currentImage) {
+  return `Migrated legacy local runtime image ${currentImage} to ${context.localRuntimeImage}.`;
+}
+
+async function updateInstanceRegistry(context, localEnv = {}) {
+  return await upsertInstanceRegistryEntry(context.instanceRegistryFile, buildRegistryEntry(context, localEnv));
+}
+
+async function ensureInstanceLocalEnv(context, localEnv, options = {}) {
+  const nextLocalEnv = { ...localEnv };
+  const changes = [];
+  const registry = await readInstanceRegistry(context.instanceRegistryFile);
+  const registryEntries = listInstanceRegistryEntries(registry);
+
+  if (String(nextLocalEnv.OPENCLAW_INSTANCE_ID ?? "").trim() !== context.instanceId) {
+    nextLocalEnv.OPENCLAW_INSTANCE_ID = context.instanceId;
+    changes.push("set OPENCLAW_INSTANCE_ID");
+  }
+
+  let portManaged = shouldManageGatewayPort(nextLocalEnv);
+  if (options.reassignPort) {
+    portManaged = true;
+  }
+  if (String(nextLocalEnv.OPENCLAW_PORT_MANAGED ?? "").trim() !== String(portManaged)) {
+    nextLocalEnv.OPENCLAW_PORT_MANAGED = portManaged ? "true" : "false";
+    changes.push("set OPENCLAW_PORT_MANAGED");
+  }
+
+  const currentPort = Number.parseInt(String(nextLocalEnv.OPENCLAW_GATEWAY_PORT ?? "").trim(), 10);
+  if (portManaged && (options.reassignPort || !Number.isInteger(currentPort) || currentPort === LEGACY_COMPOSE_PORT)) {
+    const allocatedPort = await allocateGatewayPort({
+      instanceId: context.instanceId,
+      registryEntries,
+      excludeInstanceId: context.instanceId
+    });
+    nextLocalEnv.OPENCLAW_GATEWAY_PORT = String(allocatedPort);
+    changes.push(options.reassignPort ? "reassigned gateway port" : "allocated gateway port");
+  }
+
+  const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, nextLocalEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
+  const currentStackImage = String(nextLocalEnv.OPENCLAW_STACK_IMAGE ?? "").trim();
+  if (useLocalBuild && (!currentStackImage || currentStackImage === defaultRuntimeImage() || currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE)) {
+    if (currentStackImage !== context.localRuntimeImage) {
+      nextLocalEnv.OPENCLAW_STACK_IMAGE = context.localRuntimeImage;
+      changes.push(currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE
+        ? formatLegacyRuntimeImageWarning(context, currentStackImage)
+        : "set repo-local runtime image");
+    }
+  }
+
+  await updateInstanceRegistry(context, nextLocalEnv);
+
+  return {
+    localEnv: nextLocalEnv,
+    registry,
+    changes
+  };
 }
 
 function isCodexAgent(value) {
@@ -646,9 +713,9 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
   });
 }
 
-function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild, defaultTargetAuthPath = "") {
+function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, useLocalBuild, defaultTargetAuthPath = "") {
   const defaults = {
-    OPENCLAW_STACK_IMAGE: useLocalBuild ? "openclaw-repo-agent-runtime:local" : defaultRuntimeImage(),
+    OPENCLAW_STACK_IMAGE: useLocalBuild ? context.localRuntimeImage : defaultRuntimeImage(),
     OPENCLAW_IMAGE: DEFAULT_OPENCLAW_IMAGE,
     OPENCLAW_AGENT_NPM_PACKAGES: "",
     OPENCLAW_AGENT_INSTALL_COMMAND: "",
@@ -673,7 +740,9 @@ function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocal
     OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY: "true",
     OPENCLAW_TOPIC_ACP: "",
     OPENCLAW_USE_LOCAL_BUILD: useLocalBuild ? "true" : "false",
-    OPENCLAW_GATEWAY_PORT: "18789",
+    OPENCLAW_INSTANCE_ID: context.instanceId,
+    OPENCLAW_PORT_MANAGED: "true",
+    OPENCLAW_GATEWAY_PORT: String(LEGACY_COMPOSE_PORT),
     OPENCLAW_GATEWAY_BIND: "lan",
     OPENCLAW_GATEWAY_TOKEN: randomToken(),
     OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: "",
@@ -708,18 +777,21 @@ function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocal
 }
 
 function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCodexAuthPath = "") {
-  const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || "18789";
+  const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || String(LEGACY_COMPOSE_PORT);
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
     || JSON.stringify([`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`]);
   const effectiveTargetAuthPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim() || detectedCodexAuthPath;
   const targetAuthPath = effectiveTargetAuthPath
     ? path.resolve(effectiveTargetAuthPath.replace(/\//g, path.sep))
     : context.paths.emptyAuthDir;
+  const telegramTokenHash = fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN);
 
   return {
     OPENCLAW_COMPOSE_PROJECT_NAME: context.composeProjectName,
-    OPENCLAW_GATEWAY_CONTAINER_NAME: context.composeProjectName,
+    OPENCLAW_INSTANCE_ID: context.instanceId,
     OPENCLAW_PRODUCT_ROOT: toDockerPath(context.productRoot),
+    OPENCLAW_PRODUCT_NAME: PRODUCT_NAME,
+    OPENCLAW_PRODUCT_VERSION: PRODUCT_VERSION,
     OPENCLAW_STACK_IMAGE: localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage(),
     OPENCLAW_IMAGE: localEnv.OPENCLAW_IMAGE || DEFAULT_OPENCLAW_IMAGE,
     OPENCLAW_AGENT_NPM_PACKAGES: localEnv.OPENCLAW_AGENT_NPM_PACKAGES || "",
@@ -730,6 +802,8 @@ function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCod
     OPENCLAW_GATEWAY_BIND: localEnv.OPENCLAW_GATEWAY_BIND || "lan",
     OPENCLAW_GATEWAY_TOKEN: localEnv.OPENCLAW_GATEWAY_TOKEN || randomToken(),
     OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: controlUiOrigins,
+    OPENCLAW_REPO_ROOT_HOST: toDockerPath(context.repoRoot),
+    OPENCLAW_TELEGRAM_TOKEN_HASH: telegramTokenHash,
     TELEGRAM_BOT_TOKEN: localEnv.TELEGRAM_BOT_TOKEN || "",
     OPENAI_API_KEY: localEnv.OPENAI_API_KEY || "",
     OPENCLAW_HOST_PLATFORM: process.platform,
@@ -840,6 +914,132 @@ async function gatewayRunning(context) {
   }
 }
 
+async function dockerPsByComposeProject(projectName, options = {}) {
+  const args = [
+    "ps",
+    ...(options.all ? ["-a"] : []),
+    "--filter",
+    `label=com.docker.compose.project=${projectName}`,
+    "--format",
+    "{{.Names}}|{{.Status}}"
+  ];
+  const result = await safeRunCommand("docker", args, { cwd: options.cwd ?? process.cwd() });
+  if (result.code !== 0) return [];
+  return result.stdout
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, status] = line.split("|");
+      return {
+        name: String(name ?? "").trim(),
+        status: String(status ?? "").trim()
+      };
+    });
+}
+
+async function canBindPort(port) {
+  try {
+    const server = await new Promise((resolve, reject) => {
+      const next = spawn(process.execPath, ["-e", `const net=require('node:net');const s=net.createServer();s.once('error',()=>process.exit(1));s.listen({host:'127.0.0.1',port:${port},exclusive:true},()=>s.close(()=>process.exit(0)));`], {
+        stdio: "ignore"
+      });
+      next.on("error", reject);
+      next.on("close", (code) => resolve(code === 0));
+    });
+    return server === true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectLegacyComposeProject(context) {
+  if (!context.legacyComposeProjectName || context.legacyComposeProjectName === context.composeProjectName) {
+    return [];
+  }
+  return await dockerPsByComposeProject(context.legacyComposeProjectName, {
+    all: true,
+    cwd: context.repoRoot
+  });
+}
+
+async function detectGatewayPortState(context, localEnv) {
+  const gatewayPort = Number.parseInt(String(localEnv.OPENCLAW_GATEWAY_PORT ?? "").trim(), 10);
+  if (!Number.isInteger(gatewayPort)) {
+    return {
+      ok: false,
+      gatewayPort: null,
+      portBindable: false,
+      duplicateAssignment: null,
+      message: "Gateway port is not configured."
+    };
+  }
+
+  const registry = await readInstanceRegistry(context.instanceRegistryFile);
+  const duplicateAssignment = listInstanceRegistryEntries(registry).find((entry) =>
+    entry.instanceId !== context.instanceId && Number.parseInt(entry.gatewayPort, 10) === gatewayPort
+  ) ?? null;
+  if (duplicateAssignment) {
+    return {
+      ok: false,
+      gatewayPort,
+      portBindable: false,
+      duplicateAssignment,
+      message: `Gateway port ${gatewayPort} is already assigned to ${duplicateAssignment.instanceId}.`
+    };
+  }
+
+  if (await gatewayRunning(context)) {
+    return {
+      ok: true,
+      gatewayPort,
+      portBindable: true,
+      duplicateAssignment: null,
+      message: `Gateway port ${gatewayPort} is already in use by this repo's running gateway.`
+    };
+  }
+
+  const portBindable = await canBindPort(gatewayPort);
+  return {
+    ok: portBindable,
+    gatewayPort,
+    portBindable,
+    duplicateAssignment: null,
+    message: portBindable
+      ? `Gateway port ${gatewayPort} is available.`
+      : `Gateway port ${gatewayPort} is already bound by another process.`
+  };
+}
+
+function findRegisteredTelegramTokenConflicts(context, registry, localEnv) {
+  const tokenHash = fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN);
+  if (!tokenHash) return [];
+  return listInstanceRegistryEntries(registry).filter((entry) =>
+    entry.instanceId !== context.instanceId && entry.telegramTokenHash === tokenHash
+  );
+}
+
+async function findRunningTelegramTokenConflicts(context, localEnv) {
+  const registry = await readInstanceRegistry(context.instanceRegistryFile);
+  const candidates = findRegisteredTelegramTokenConflicts(context, registry, localEnv);
+  const running = [];
+
+  for (const entry of candidates) {
+    const containers = await dockerPsByComposeProject(entry.composeProjectName, {
+      all: false,
+      cwd: context.repoRoot
+    });
+    if (containers.length > 0) {
+      running.push({
+        ...entry,
+        containers
+      });
+    }
+  }
+
+  return running;
+}
+
 async function rerenderIfRunning(context) {
   if (!(await gatewayRunning(context))) return;
   await dockerCompose(context, ["exec", "openclaw-gateway", "node", "/opt/openclaw/render-openclaw-config.mjs"]);
@@ -852,7 +1052,21 @@ async function prepareState(context, options = {}) {
   }
 
   const plugin = normalizePluginConfig(pluginRaw, context.repoRoot, context.detection, options);
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
+  const existingLocalEnv = await readEnvFile(context.paths.localEnvFile);
+  const ensuredInstance = await ensureInstanceLocalEnv(context, existingLocalEnv, options);
+  const localEnv = {
+    ...buildLocalEnvTemplateValues(
+      context,
+      plugin,
+      existingLocalEnv,
+      options,
+      resolveBoolean(localOverrideValue(options.useLocalBuild, ensuredInstance.localEnv.OPENCLAW_USE_LOCAL_BUILD, false), false)
+    ),
+    ...ensuredInstance.localEnv
+  };
+  if (JSON.stringify(localEnv) !== JSON.stringify(existingLocalEnv)) {
+    await writeEnvFile(context.paths.localEnvFile, localEnv, LOCAL_ENV_HEADER);
+  }
   const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
   const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, localEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnv, options);
@@ -875,7 +1089,8 @@ async function prepareState(context, options = {}) {
     manifest,
     runtimeEnv,
     useLocalBuild,
-    detectedCodexAuthPath
+    detectedCodexAuthPath,
+    instanceRegistry: ensuredInstance.registry
   };
 }
 
@@ -890,10 +1105,12 @@ async function ensureDockerMcpAvailable(cwd) {
   }
 }
 
-function buildMcpStatusPayload(repoConfigPath, configPathResult, clientListResult) {
+function buildMcpStatusPayload(context, repoConfigPath, profileExists, configPathResult, clientListResult) {
   const activeConfigPath = configPathResult.code === 0 ? configPathResult.stdout.trim() : "";
   let codexConnected = false;
   let codexInstalled = false;
+  let codexCommand = "";
+  let codexArgs = [];
 
   if (clientListResult.code === 0) {
     try {
@@ -901,22 +1118,31 @@ function buildMcpStatusPayload(repoConfigPath, configPathResult, clientListResul
       const codex = payload.codex;
       codexConnected = Boolean(codex?.dockerMCPCatalogConnected);
       codexInstalled = Boolean(codex?.isInstalled);
+      const firstServer = Array.isArray(codex?.Cfg?.STDIOServers) ? codex.Cfg.STDIOServers[0] : null;
+      codexCommand = String(firstServer?.command ?? "").trim();
+      codexArgs = Array.isArray(firstServer?.args) ? firstServer.args.map((value) => String(value)) : [];
     } catch {}
   }
 
   return {
+    profileName: context.dockerMcpProfile,
     repoConfigPath,
     activeConfigPath,
+    profileExists,
     usesRepoConfig: Boolean(activeConfigPath) && path.resolve(activeConfigPath) === path.resolve(repoConfigPath),
+    profileActive: Boolean(activeConfigPath) && path.resolve(activeConfigPath) === path.resolve(repoConfigPath),
     codexConnected,
-    codexInstalled
+    codexInstalled,
+    codexCommand,
+    codexArgs
   };
 }
 
 async function readDockerMcpStatus(context, repoConfigPath = context.paths.dockerMcpConfigFile) {
+  const profileExists = await fileExists(repoConfigPath);
   const configPathResult = await dockerMcpCapture(["config", "read"], context.repoRoot);
   const clientListResult = await dockerMcpCapture(["client", "ls", "--global", "--json"], context.repoRoot);
-  return buildMcpStatusPayload(repoConfigPath, configPathResult, clientListResult);
+  return buildMcpStatusPayload(context, repoConfigPath, profileExists, configPathResult, clientListResult);
 }
 
 async function readDockerMcpSecretEntries(context) {
@@ -977,7 +1203,7 @@ async function ensureRuntimeImageReady(context, state, options = {}) {
     throw new Error(pullOutput || "Failed to pull the runtime image.");
   }
 
-  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage);
+  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage, context.localRuntimeImage);
   await writeEnvFile(context.paths.localEnvFile, nextLocalEnv, LOCAL_ENV_HEADER);
   nextState = await prepareState(context, { ...options, useLocalBuild: true });
   autoSwitchedToLocalBuild = true;
@@ -1023,7 +1249,7 @@ async function syncDockerMcpSecrets(context, localEnv) {
   };
 }
 
-async function ensurePermanentDockerMcp(context, options = {}) {
+async function ensureDockerMcpSetup(context, options = {}) {
   const repoConfigPath = options.repoConfigPath ?? await ensureDockerMcpConfig(context);
   await ensureDockerMcpAvailable(context.repoRoot);
 
@@ -1037,37 +1263,11 @@ async function ensurePermanentDockerMcp(context, options = {}) {
     throw new Error(enable.stderr.trim() || enable.stdout.trim() || "Failed to enable the required Docker MCP servers.");
   }
 
-  const statusBefore = await readDockerMcpStatus(context, repoConfigPath);
   const actions = [];
-
-  if (!statusBefore.usesRepoConfig) {
-    const configWrite = await dockerMcpCapture(["config", "write", repoConfigPath], context.repoRoot);
-    if (configWrite.code !== 0) {
-      throw new Error(configWrite.stderr.trim() || configWrite.stdout.trim() || "Failed to point Docker MCP at the repo-local config.");
-    }
-    actions.push("activated repo config");
-  }
-
-  const statusAfterConfig = statusBefore.usesRepoConfig
-    ? statusBefore
-    : await readDockerMcpStatus(context, repoConfigPath);
-  if (!statusAfterConfig.codexConnected) {
-    const connect = await dockerMcpCapture(["client", "connect", "codex", "--global"], context.repoRoot);
-    if (connect.code !== 0) {
-      throw new Error(connect.stderr.trim() || connect.stdout.trim() || "Failed to connect Codex to the Docker MCP gateway.");
-    }
-    actions.push("connected Codex");
-  }
-
-  const finalStatus = statusAfterConfig.codexConnected
-    ? statusAfterConfig
-    : await readDockerMcpStatus(context, repoConfigPath);
-  if (!finalStatus.codexConnected) {
-    throw new Error("Codex could not be connected to the Docker MCP gateway. Install Codex locally and rerun the command.");
-  }
   const localEnv = options.localEnv ?? await readEnvFile(context.paths.localEnvFile);
   const secretStatus = await syncDockerMcpSecrets(context, localEnv);
   actions.push(...secretStatus.actions);
+  const finalStatus = await readDockerMcpStatus(context, repoConfigPath);
 
   return {
     ok: true,
@@ -1075,6 +1275,57 @@ async function ensurePermanentDockerMcp(context, options = {}) {
     actions,
     secretStatus,
     ...finalStatus
+  };
+}
+
+function codexTargetsRepoConfig(status) {
+  if (!status.codexConnected) return false;
+  if (!status.profileActive) return false;
+  const command = path.basename(String(status.codexCommand ?? "")).toLowerCase();
+  const args = Array.isArray(status.codexArgs) ? status.codexArgs : [];
+  return command.startsWith("docker")
+    && args.includes("mcp")
+    && args.includes("gateway")
+    && args.includes("run");
+}
+
+async function activateDockerMcpForRepo(context, options = {}) {
+  const repoConfigPath = options.repoConfigPath ?? await ensureDockerMcpConfig(context);
+  const setup = await ensureDockerMcpSetup(context, {
+    ...options,
+    repoConfigPath
+  });
+  const statusBefore = await readDockerMcpStatus(context, repoConfigPath);
+  const actions = [...setup.actions];
+
+  if (!statusBefore.profileActive) {
+    const configWrite = await dockerMcpCapture(["config", "write", repoConfigPath], context.repoRoot);
+    if (configWrite.code !== 0) {
+      throw new Error(configWrite.stderr.trim() || configWrite.stdout.trim() || "Failed to activate this repo's Docker MCP config.");
+    }
+    actions.push("activated repo config");
+  }
+
+  const statusAfterConfig = statusBefore.profileActive
+    ? statusBefore
+    : await readDockerMcpStatus(context, repoConfigPath);
+  if (!codexTargetsRepoConfig(statusAfterConfig)) {
+    const connect = await dockerMcpCapture(["client", "connect", "codex", "--global"], context.repoRoot);
+    if (connect.code !== 0) {
+      throw new Error(connect.stderr.trim() || connect.stdout.trim() || "Failed to connect Codex to the Docker MCP gateway.");
+    }
+    actions.push("connected Codex");
+  }
+
+  const finalStatus = await readDockerMcpStatus(context, repoConfigPath);
+  if (!codexTargetsRepoConfig(finalStatus)) {
+    throw new Error("Codex could not be connected to this repo's Docker MCP config. Install Codex locally and rerun the command.");
+  }
+
+  return {
+    ...setup,
+    ...finalStatus,
+    actions
   };
 }
 
@@ -1276,7 +1527,7 @@ async function handleInit(context, options) {
   }
 
   const localEnvValues = {
-    ...buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild, detectedCodexAuthPath),
+    ...buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, useLocalBuild, detectedCodexAuthPath),
     ...initState.localEnv
   };
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnvValues, options);
@@ -1299,8 +1550,6 @@ async function handleInit(context, options) {
     await writeTextFile(context.paths.knowledgeFile, defaultKnowledgeTemplate(plugin.projectName));
   }
 
-  await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample(useLocalBuild));
-
   if (!(await fileExists(context.paths.localEnvFile)) || options.force) {
     await writeEnvFile(
       context.paths.localEnvFile,
@@ -1311,10 +1560,17 @@ async function handleInit(context, options) {
 
   await ensureGitignoreEntries(context.repoRoot);
   const state = await prepareState(context, options);
-  const mcp = await ensurePermanentDockerMcp(context, {
+  await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample(state.useLocalBuild, {
+    instanceId: context.instanceId,
+    gatewayPort: state.localEnv.OPENCLAW_GATEWAY_PORT,
+    portManaged: state.localEnv.OPENCLAW_PORT_MANAGED,
+    stackImage: state.localEnv.OPENCLAW_STACK_IMAGE
+  }));
+  const mcp = await ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
+  const registeredConflicts = findRegisteredTelegramTokenConflicts(context, state.instanceRegistry, state.localEnv);
 
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.localEnvFile)}`);
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.manifestFile)}`);
@@ -1322,7 +1578,13 @@ async function handleInit(context, options) {
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.dockerMcpConfigFile)}`);
   console.log(`Detected preset: ${plugin.profile}`);
   console.log(`Effective tooling profile: ${state.manifest.toolingProfile}`);
+  console.log(`Instance: ${context.instanceId}`);
+  console.log(`Compose project: ${context.composeProjectName}`);
+  console.log(`Docker MCP profile: ${context.dockerMcpProfile}`);
   console.log(`Docker MCP: ${mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready"}`);
+  if (registeredConflicts.length > 0) {
+    console.log(`Warning: this Telegram bot token is also configured in ${registeredConflicts.length} other registered repo instance(s).`);
+  }
 }
 
 async function handleConfigValidate(context, options) {
@@ -1362,7 +1624,7 @@ async function handleConfigMigrate(context, options) {
 
 async function handleUp(context, options) {
   let state = await prepareState(context, options);
-  const mcp = await ensurePermanentDockerMcp(context, {
+  const mcp = await ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
@@ -1374,6 +1636,17 @@ async function handleUp(context, options) {
 
   const runtimeReady = await ensureRuntimeImageReady(context, state, options);
   state = runtimeReady.state;
+  const portState = await detectGatewayPortState(context, state.localEnv);
+  if (!portState.ok) {
+    throw new Error(`${portState.message} ${state.localEnv.OPENCLAW_PORT_MANAGED === "true" ? "Run `openclaw-repo-agent up --reassign-port` or `openclaw-repo-agent doctor --fix`." : "Edit OPENCLAW_GATEWAY_PORT in .openclaw/local.env."}`);
+  }
+  const runningTokenConflicts = await findRunningTelegramTokenConflicts(context, state.localEnv);
+  if (runningTokenConflicts.length > 0) {
+    const details = runningTokenConflicts
+      .map((entry) => `${entry.instanceId} (${entry.repoRoot})`)
+      .join(", ");
+    throw new Error(`Telegram bot token is already in use by another running repo instance: ${details}. Use a separate bot token per repo.`);
+  }
   if (runtimeReady.autoSwitchedToLocalBuild) {
     console.log("Remote runtime image is unavailable. Falling back to a local runtime build.");
   }
@@ -1382,7 +1655,10 @@ async function handleUp(context, options) {
   if (state.useLocalBuild) args.push("--build");
   await dockerCompose(context, args);
   if (mcp.actions.length > 0) {
-    console.log(`Docker MCP: ${mcp.actions.join(", ")}.`);
+    console.log(`Docker MCP setup: ${mcp.actions.join(", ")}.`);
+  }
+  if (!mcp.profileActive || !codexTargetsRepoConfig(mcp)) {
+    console.log(`Docker MCP profile ${context.dockerMcpProfile} is ready but not active. Run \`${PRODUCT_NAME} mcp use\` when you want Codex to target this repo.`);
   }
   if (runtimeReady.autoSwitchedToLocalBuild) {
     console.log(`Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.`);
@@ -1507,7 +1783,7 @@ async function handlePair(context, options) {
   await writeEnvFile(
     context.paths.localEnvFile,
     {
-      ...buildLocalEnvTemplateValues(plugin, localEnv, options, resolveBoolean(localEnv.OPENCLAW_USE_LOCAL_BUILD, false)),
+      ...buildLocalEnvTemplateValues(context, plugin, localEnv, options, resolveBoolean(localEnv.OPENCLAW_USE_LOCAL_BUILD, false)),
       ...localEnv
     },
     LOCAL_ENV_HEADER
@@ -1565,6 +1841,15 @@ async function handleStatus(context, options) {
     latestVersion,
     updateStatus,
     running,
+    instance: {
+      instanceId: context.instanceId,
+      composeProjectName: context.composeProjectName,
+      legacyComposeProjectName: context.legacyComposeProjectName,
+      gatewayPort: state.localEnv.OPENCLAW_GATEWAY_PORT,
+      portManaged: shouldManageGatewayPort(state.localEnv),
+      localRuntimeImage: context.localRuntimeImage,
+      dockerMcpProfile: context.dockerMcpProfile
+    },
     manifest: {
       projectName: state.manifest.projectName,
       deploymentProfile: state.manifest.deploymentProfile,
@@ -1576,6 +1861,7 @@ async function handleStatus(context, options) {
     }
   };
   const dockerMcpAvailable = (await dockerMcpCapture(["--help"], context.repoRoot)).code === 0;
+  const legacyContainers = await detectLegacyComposeProject(context);
   payload.mcp = dockerMcpAvailable
     ? {
         available: true,
@@ -1586,12 +1872,18 @@ async function handleStatus(context, options) {
         available: false,
         repoConfigPath: context.paths.dockerMcpConfigFile
       };
+  payload.runtime = {
+    legacyComposeProjectDetected: legacyContainers.length > 0
+  };
 
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
   } else {
     console.log(`Version: ${PRODUCT_VERSION}`);
     console.log(`Update status: ${updateStatus}`);
+    console.log(`Instance: ${context.instanceId}`);
+    console.log(`Compose project: ${context.composeProjectName}`);
+    console.log(`Gateway port: ${state.localEnv.OPENCLAW_GATEWAY_PORT} (${shouldManageGatewayPort(state.localEnv) ? "managed" : "manual"})`);
     console.log(`Project: ${state.manifest.projectName}`);
     console.log(`Deployment: ${state.manifest.deploymentProfile}`);
     console.log(`Tooling: ${state.manifest.toolingProfile}`);
@@ -1599,20 +1891,24 @@ async function handleStatus(context, options) {
     console.log(`Queue: ${state.manifest.queueProfile}`);
     console.log(`Auth: ${state.manifest.security.authBootstrapMode}`);
     console.log(`Gateway: ${running ? "running" : "stopped"}`);
-    console.log(`Docker MCP: ${payload.mcp.available ? (payload.mcp.usesRepoConfig && payload.mcp.codexConnected ? "ready" : "needs attention") : "unavailable"}`);
+    console.log(`Docker MCP profile: ${context.dockerMcpProfile}`);
+    console.log(`Docker MCP: ${payload.mcp.available ? (codexTargetsRepoConfig(payload.mcp) ? "active" : "ready but inactive") : "unavailable"}`);
     if (payload.mcp.available) {
       console.log(`Docker MCP secrets: ${payload.mcp.secretStatus.syncedConfiguredCount}/${payload.mcp.secretStatus.configuredCount} configured secrets synced`);
+    }
+    if (legacyContainers.length > 0) {
+      console.log(`Legacy compose project detected: ${context.legacyComposeProjectName}`);
     }
     console.log(`Verification commands: ${state.manifest.verificationCommands.length}`);
   }
 }
 
-function pushCheck(results, key, ok, detail, recovery = "") {
-  results.push({ key, ok, detail, recovery });
+function pushCheck(results, key, ok, detail, recovery = "", level = "error") {
+  results.push({ key, ok, detail, recovery, level });
 }
 
 async function handleDoctor(context, options) {
-  const state = await prepareState(context, options);
+  let state = await prepareState(context, options);
   const results = [];
 
   const dockerVersion = await safeRunCommand("docker", ["--version"]);
@@ -1639,7 +1935,8 @@ async function handleDoctor(context, options) {
     "docker-mcp",
     dockerMcpVersion.code === 0,
     dockerMcpVersion.code === 0 ? dockerMcpVersion.stdout.trim() || "Docker MCP Toolkit is available." : "Docker MCP Toolkit is not available.",
-    dockerMcpVersion.code === 0 ? "" : "Install or update Docker MCP Toolkit before using this project."
+    dockerMcpVersion.code === 0 ? "" : "Install or update Docker MCP Toolkit before using this project.",
+    "warning"
   );
 
   if (dockerMcpVersion.code === 0) {
@@ -1648,18 +1945,20 @@ async function handleDoctor(context, options) {
     pushCheck(
       results,
       "docker-mcp-config",
-      mcpStatus.usesRepoConfig,
-      mcpStatus.usesRepoConfig ? "Docker MCP is using this repo's generated config." : "Docker MCP is not using this repo's generated config.",
-      mcpStatus.usesRepoConfig ? "" : DOCKER_MCP_REQUIRED_RECOVERY
+      mcpStatus.profileActive,
+      mcpStatus.profileActive ? "Docker MCP is using this repo's generated config." : "Docker MCP is ready, but another repo config is active.",
+      mcpStatus.profileActive ? "" : DOCKER_MCP_REQUIRED_RECOVERY,
+      "warning"
     );
     pushCheck(
       results,
       "docker-mcp-codex",
-      mcpStatus.codexInstalled && mcpStatus.codexConnected,
+      codexTargetsRepoConfig(mcpStatus),
       mcpStatus.codexInstalled
-        ? (mcpStatus.codexConnected ? "Codex is connected to the Docker MCP gateway." : "Codex is installed but not connected to the Docker MCP gateway.")
+        ? (codexTargetsRepoConfig(mcpStatus) ? "Codex is connected to this repo's Docker MCP gateway." : "Codex is installed, but not connected to this repo's Docker MCP config.")
         : "Codex is not installed.",
-      mcpStatus.codexInstalled && mcpStatus.codexConnected ? "" : DOCKER_MCP_REQUIRED_RECOVERY
+      codexTargetsRepoConfig(mcpStatus) ? "" : DOCKER_MCP_REQUIRED_RECOVERY,
+      "warning"
     );
     pushCheck(
       results,
@@ -1668,7 +1967,8 @@ async function handleDoctor(context, options) {
       secretStatus.configuredCount > 0
         ? `Docker MCP secrets are synced for ${secretStatus.syncedConfiguredCount}/${secretStatus.configuredCount} configured credentials.`
         : "No Docker MCP-managed credentials are configured yet.",
-      secretStatus.missingConfiguredSecrets.length === 0 ? "" : "Run `openclaw-repo-agent up` or `openclaw-repo-agent mcp setup` to resync Docker MCP secrets."
+      secretStatus.missingConfiguredSecrets.length === 0 ? "" : "Run `openclaw-repo-agent mcp setup` to resync Docker MCP secrets.",
+      "warning"
     );
   }
 
@@ -1719,6 +2019,46 @@ async function handleDoctor(context, options) {
   }
 
   let running = await gatewayRunning(context);
+  const portStateBeforeFix = await detectGatewayPortState(context, state.localEnv);
+  if (!portStateBeforeFix.ok && options.fix && shouldManageGatewayPort(state.localEnv)) {
+    state = await prepareState(context, { ...options, reassignPort: true });
+  }
+  const portState = await detectGatewayPortState(context, state.localEnv);
+  pushCheck(
+    results,
+    "gateway-port",
+    portState.ok,
+    portState.message,
+    portState.ok
+      ? ""
+      : (shouldManageGatewayPort(state.localEnv)
+        ? "Run `openclaw-repo-agent doctor --fix` or `openclaw-repo-agent up --reassign-port`."
+        : `Edit OPENCLAW_GATEWAY_PORT in ${context.paths.localEnvFile}.`)
+  );
+
+  const legacyContainers = await detectLegacyComposeProject(context);
+  pushCheck(
+    results,
+    "legacy-compose-project",
+    legacyContainers.length === 0,
+    legacyContainers.length === 0
+      ? "No legacy compose project is running."
+      : `Legacy compose project ${context.legacyComposeProjectName} is still present.`,
+    legacyContainers.length === 0 ? "" : "Run `openclaw-repo-agent update` to clean up the legacy stack.",
+    "warning"
+  );
+
+  const tokenConflicts = await findRunningTelegramTokenConflicts(context, state.localEnv);
+  pushCheck(
+    results,
+    "telegram-token-uniqueness",
+    tokenConflicts.length === 0,
+    tokenConflicts.length === 0
+      ? "Telegram bot token is unique among running repo instances."
+      : `Telegram bot token is also in use by ${tokenConflicts.map((entry) => entry.instanceId).join(", ")}.`,
+    tokenConflicts.length === 0 ? "" : "Use a separate TELEGRAM_BOT_TOKEN per repo instance."
+  );
+
   if (!running && options.fix) {
     await handleUp(context, options);
     running = await gatewayRunning(context);
@@ -1779,12 +2119,13 @@ async function handleDoctor(context, options) {
     );
   }
 
-  const ok = results.every((result) => result.ok);
+  const ok = results.every((result) => result.ok || result.level === "warning");
   if (options.json) {
     console.log(JSON.stringify({ ok, results }, null, 2));
   } else {
     for (const result of results) {
-      console.log(`${result.ok ? "OK" : "FAIL"} ${result.key}: ${result.detail}`);
+      const statusLabel = result.ok ? "OK" : (result.level === "warning" ? "WARN" : "FAIL");
+      console.log(`${statusLabel} ${result.key}: ${result.detail}`);
       if (!result.ok && result.recovery) console.log(`Next step: ${result.recovery}`);
     }
   }
@@ -1798,7 +2139,7 @@ async function handleDoctor(context, options) {
 async function handleUpdate(context, options) {
   await handleConfigMigrate(context, options);
   let state = await prepareState(context, options);
-  await ensurePermanentDockerMcp(context, {
+  await ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
@@ -1807,6 +2148,14 @@ async function handleUpdate(context, options) {
   if (runtimeReady.autoSwitchedToLocalBuild) {
     console.log("Remote runtime image is unavailable. Falling back to a local runtime build.");
     console.log(`Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.`);
+  }
+  const legacyContainers = await detectLegacyComposeProject(context);
+  if (legacyContainers.length > 0) {
+    console.log(`Cleaning up legacy compose project ${context.legacyComposeProjectName}.`);
+    await dockerCompose({
+      ...context,
+      composeProjectName: context.legacyComposeProjectName
+    }, ["down", "--remove-orphans"]);
   }
   if (await gatewayRunning(context)) {
     const args = ["up", "-d"];
@@ -1819,8 +2168,8 @@ async function handleUpdate(context, options) {
 async function handleMcpSetup(context, options) {
   await ensureGitignoreEntries(context.repoRoot);
   const payload = {
-    ...(await ensurePermanentDockerMcp(context)),
-    nextStep: "Docker MCP is part of the default flow now; `init` and `up` will keep it active for this repo."
+    ...(await ensureDockerMcpSetup(context)),
+    nextStep: `Run \`${PRODUCT_NAME} mcp use\` when you want Codex and Docker MCP to target this repo.`
   };
 
   if (options.json) {
@@ -1830,23 +2179,29 @@ async function handleMcpSetup(context, options) {
 
   console.log(`Prepared ${path.relative(context.repoRoot, payload.repoConfigPath)}`);
   console.log(`Enabled Docker MCP servers: ${DEFAULT_DOCKER_MCP_SERVERS.join(", ")}`);
+  console.log(`Docker MCP profile: ${context.dockerMcpProfile}`);
   console.log(`Active Docker MCP config: ${payload.activeConfigPath || "not set"}`);
-  console.log(`Codex connected to Docker MCP: ${payload.codexConnected ? "yes" : "no"}`);
+  console.log(`Codex connected to this repo: ${codexTargetsRepoConfig(payload) ? "yes" : "no"}`);
   console.log(`Docker MCP secrets synced: ${payload.secretStatus.syncedConfiguredCount}/${payload.secretStatus.configuredCount}`);
   console.log(`Docker MCP: ${payload.actions.length > 0 ? payload.actions.join(", ") : "ready"}`);
   console.log("GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/local.env.");
 }
 
-async function handleMcpConnect(context, options) {
-  const payload = await ensurePermanentDockerMcp(context);
+async function handleMcpUse(context, options) {
+  const payload = await activateDockerMcpForRepo(context);
 
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
     return;
   }
 
-  console.log("Codex is connected to the Docker MCP gateway.");
+  console.log(`Activated Docker MCP profile ${context.dockerMcpProfile}.`);
+  console.log("Codex is connected to this repo's Docker MCP gateway.");
   console.log("Restart Codex if it is already running.");
+}
+
+async function handleMcpConnect(context, options) {
+  return await handleMcpUse(context, options);
 }
 
 async function handleMcpStatus(context, options) {
@@ -1854,9 +2209,12 @@ async function handleMcpStatus(context, options) {
   const payload = {
     ok: true,
     dockerMcpAvailable: false,
+    profileName: context.dockerMcpProfile,
+    profileExists: false,
     repoConfigPath,
     activeConfigPath: "",
     usesRepoConfig: false,
+    profileActive: false,
     codexConnected: false,
     codexInstalled: false,
     secretStatus: emptyDockerMcpSecretStatus()
@@ -1878,7 +2236,7 @@ async function handleMcpStatus(context, options) {
   payload.dockerMcpAvailable = true;
   const configPathResult = await dockerMcpCapture(["config", "read"], context.repoRoot);
   const clientListResult = await dockerMcpCapture(["client", "ls", "--global", "--json"], context.repoRoot);
-  Object.assign(payload, buildMcpStatusPayload(repoConfigPath, configPathResult, clientListResult));
+  Object.assign(payload, buildMcpStatusPayload(context, repoConfigPath, await fileExists(repoConfigPath), configPathResult, clientListResult));
   const localEnv = await readEnvFile(context.paths.localEnvFile);
   payload.secretStatus = await readDockerMcpSecretStatus(context, localEnv);
 
@@ -1887,16 +2245,58 @@ async function handleMcpStatus(context, options) {
     return;
   }
 
+  console.log(`Docker MCP profile: ${payload.profileName}`);
   console.log(`Repo Docker MCP config: ${path.relative(context.repoRoot, repoConfigPath)}`);
   console.log(`Active Docker MCP config: ${payload.activeConfigPath || "not set"}`);
-  console.log(`Using this repo's config: ${payload.usesRepoConfig ? "yes" : "no"}`);
+  console.log(`Using this repo's config: ${payload.profileActive ? "yes" : "no"}`);
   console.log(`Codex installed: ${payload.codexInstalled ? "yes" : "no"}`);
-  console.log(`Codex connected to Docker MCP: ${payload.codexConnected ? "yes" : "no"}`);
+  console.log(`Codex connected to this repo: ${codexTargetsRepoConfig(payload) ? "yes" : "no"}`);
   console.log(`Docker MCP secrets synced: ${payload.secretStatus.syncedConfiguredCount}/${payload.secretStatus.configuredCount}`);
-  if (!payload.usesRepoConfig) {
+  if (!payload.profileActive || !codexTargetsRepoConfig(payload)) {
     console.log(`Next step: ${DOCKER_MCP_REQUIRED_RECOVERY}`);
-  } else if (!payload.codexConnected) {
-    console.log(`Next step: ${DOCKER_MCP_REQUIRED_RECOVERY}`);
+  }
+}
+
+async function handleInstancesList(context, options) {
+  const registry = await readInstanceRegistry(context.instanceRegistryFile);
+  const instances = [];
+
+  for (const entry of listInstanceRegistryEntries(registry)) {
+    const containers = await dockerPsByComposeProject(entry.composeProjectName, {
+      all: true,
+      cwd: context.repoRoot
+    });
+    instances.push({
+      ...entry,
+      running: containers.some((container) => /^up\b/i.test(container.status)),
+      containers
+    });
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      ok: true,
+      registryPath: context.instanceRegistryFile,
+      instances
+    }, null, 2));
+    return;
+  }
+
+  console.log(`Instance registry: ${context.instanceRegistryFile}`);
+  if (instances.length === 0) {
+    console.log("No repo instances are registered on this machine yet.");
+    return;
+  }
+
+  for (const entry of instances) {
+    console.log(`${entry.instanceId} ${entry.running ? "(running)" : "(stopped)"}`);
+    console.log(`Repo: ${entry.repoRoot}`);
+    console.log(`Compose: ${entry.composeProjectName}`);
+    console.log(`Port: ${entry.gatewayPort || "(unset)"} ${entry.portManaged ? "[managed]" : "[manual]"}`);
+    console.log(`Docker MCP profile: ${entry.dockerMcpProfile}`);
+    if (entry.containers.length > 0) {
+      console.log(`Containers: ${entry.containers.map((container) => `${container.name} [${container.status}]`).join(", ")}`);
+    }
   }
 }
 
@@ -1915,9 +2315,11 @@ Commands:
   verify           Run configured verification commands in the gateway
   status           Show rendered manifest and runtime status
   update           Refresh generated state and restart the stack when needed
-  mcp setup        Repair or reapply the required Docker MCP setup for this repo
-  mcp status       Show Docker MCP activation status for this repo
-  mcp connect      Reconnect Codex globally to the Docker MCP gateway
+  instances list   Show all registered repo instances on this machine
+  mcp setup        Prepare this repo's Docker MCP config and sync secrets
+  mcp use          Activate this repo's Docker MCP config for Codex
+  mcp status       Show Docker MCP status for this repo
+  mcp connect      Compatibility alias for mcp use
   config validate  Validate the repo plugin and rendered manifest
   config migrate   Rewrite plugin.json using current defaults
 
@@ -1925,20 +2327,23 @@ Global options:
   --repo-root <path>
   --product-root <path>
   --json
+  --reassign-port
   --help, -h
   --version, -v
 
 Notes:
-  init and up now enforce the required Docker MCP setup automatically.
+  init/up/update no longer switch Docker MCP globally. Run mcp use explicitly when you want Codex to target this repo.
 
 Examples:
   ${PRODUCT_NAME} init --repo-root /path/to/repo
+  ${PRODUCT_NAME} up --reassign-port
   ${PRODUCT_NAME} status --check-updates
   ${PRODUCT_NAME} doctor --fix --verify
   ${PRODUCT_NAME} pair
   ${PRODUCT_NAME} pair --gateway-url ws://gateway.example/ws --gateway-token <token>
+  ${PRODUCT_NAME} instances list
   ${PRODUCT_NAME} mcp setup
-  ${PRODUCT_NAME} mcp connect
+  ${PRODUCT_NAME} mcp use
 `);
 }
 
@@ -1956,10 +2361,17 @@ export async function main(argv) {
 
   const repoRoot = path.resolve(parsed.options.repoRoot ?? process.cwd());
   const productRoot = resolveProductRoot(parsed.options.productRoot);
+  const instance = buildInstanceMetadata(repoRoot);
   const context = {
     repoRoot,
     productRoot,
-    composeProjectName: deriveComposeProjectName(repoRoot),
+    repoSlug: instance.repoSlug,
+    instanceId: instance.instanceId,
+    composeProjectName: instance.composeProjectName,
+    legacyComposeProjectName: instance.legacyComposeProjectName,
+    dockerMcpProfile: instance.dockerMcpProfile,
+    localRuntimeImage: instance.localRuntimeImage,
+    instanceRegistryFile: resolveInstanceRegistryPath(),
     paths: resolvePaths(repoRoot),
     detection: await detectRepository(repoRoot)
   };
@@ -1972,8 +2384,10 @@ export async function main(argv) {
   if (command === "verify") return await handleVerify(context, parsed.options);
   if (command === "status") return await handleStatus(context, parsed.options);
   if (command === "update") return await handleUpdate(context, parsed.options);
+  if (command === "instances" && subcommand === "list") return await handleInstancesList(context, parsed.options);
   if (command === "mcp" && subcommand === "setup") return await handleMcpSetup(context, parsed.options);
   if (command === "mcp" && subcommand === "status") return await handleMcpStatus(context, parsed.options);
+  if (command === "mcp" && subcommand === "use") return await handleMcpUse(context, parsed.options);
   if (command === "mcp" && subcommand === "connect") return await handleMcpConnect(context, parsed.options);
   if (command === "config" && subcommand === "validate") return await handleConfigValidate(context, parsed.options);
   if (command === "config" && subcommand === "migrate") return await handleConfigMigrate(context, parsed.options);

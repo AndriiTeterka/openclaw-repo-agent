@@ -20,6 +20,8 @@ test("global help prints usage", async () => {
   assert.match(stdout, /Usage:/);
   assert.match(stdout, /Commands:/);
   assert.match(stdout, /mcp setup/);
+  assert.match(stdout, /mcp use/);
+  assert.match(stdout, /instances list/);
   assert.equal(stderr, "");
 });
 
@@ -36,7 +38,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.1.6");
+  assert.equal(stdout.trim(), "0.2.0");
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -53,12 +55,12 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.1.6");
+  assert.equal(payload.productVersion, "0.2.0");
 });
 
-test("deriveComposeProjectName uses the repo directory slug", () => {
-  assert.equal(deriveComposeProjectName("C:\\Users\\ateterka\\appium-test-project"), "appium-test-project");
-  assert.equal(deriveComposeProjectName("C:\\Users\\ateterka\\Repo With Spaces"), "repo-with-spaces");
+test("deriveComposeProjectName uses the repo identity and prefix", () => {
+  assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\appium-test-project"), /^openclaw-appium-test-project-[a-f0-9]{8}$/);
+  assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\Repo With Spaces"), /^openclaw-repo-with-spaces-[a-f0-9]{8}$/);
 });
 
 test("selectLatestPendingPairingRequest chooses the newest request from common payload shapes", () => {
@@ -76,6 +78,47 @@ test("example consumer repo ignores the full .openclaw directory", async () => {
   const gitignore = await fs.readFile(path.join(repoRoot, "examples", "custom", ".gitignore"), "utf8");
 
   assert.match(gitignore, /^\.openclaw\/$/m);
+});
+
+test("instances list reads the machine-local registry", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-instances-"));
+  const registryDir = path.join(tempRoot, "openclaw-repo-agent");
+  await fs.mkdir(registryDir, { recursive: true });
+  await fs.writeFile(path.join(registryDir, "instances.json"), JSON.stringify({
+    version: 1,
+    instances: {
+      "repo-one-deadbeef": {
+        instanceId: "repo-one-deadbeef",
+        repoRoot: "C:/repo-one",
+        repoSlug: "repo-one",
+        composeProjectName: "openclaw-repo-one-deadbeef",
+        gatewayPort: "20001",
+        portManaged: true,
+        telegramTokenHash: "",
+        localRuntimeImage: "openclaw-repo-agent-runtime:0.2.0-repo-one-deadbeef",
+        dockerMcpProfile: "openclaw-repo-one-deadbeef",
+        lastSeenAt: "2026-03-12T00:00:00.000Z"
+      }
+    }
+  }, null, 2));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "instances",
+    "list",
+    "--json=true"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      OPENCLAW_REPO_AGENT_STATE_HOME: tempRoot
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.instances.length, 1);
+  assert.equal(payload.instances[0].instanceId, "repo-one-deadbeef");
 });
 
 test("config validation upgrades legacy codex repos to codex defaults", async () => {

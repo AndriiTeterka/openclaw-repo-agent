@@ -1,4 +1,4 @@
-export const LOCAL_RUNTIME_IMAGE = "openclaw-repo-agent-runtime:local";
+import { LEGACY_LOCAL_RUNTIME_IMAGE } from "./instance-registry.mjs";
 
 export function shouldAutoUseLocalBuild({ useLocalBuild, stackImage, defaultStackImage, errorOutput }) {
   if (useLocalBuild) return false;
@@ -16,14 +16,15 @@ export function shouldAutoUseLocalBuild({ useLocalBuild, stackImage, defaultStac
   ].some((needle) => normalizedOutput.includes(needle));
 }
 
-export function buildLocalRuntimeEnvOverrides(localEnv = {}, defaultStackImage) {
+export function buildLocalRuntimeEnvOverrides(localEnv = {}, defaultStackImage, localRuntimeImage) {
   const nextLocalEnv = {
     ...localEnv,
     OPENCLAW_USE_LOCAL_BUILD: "true"
   };
 
-  if (!String(localEnv.OPENCLAW_STACK_IMAGE ?? "").trim() || String(localEnv.OPENCLAW_STACK_IMAGE).trim() === defaultStackImage) {
-    nextLocalEnv.OPENCLAW_STACK_IMAGE = LOCAL_RUNTIME_IMAGE;
+  const currentStackImage = String(localEnv.OPENCLAW_STACK_IMAGE ?? "").trim();
+  if (!currentStackImage || currentStackImage === defaultStackImage || currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE) {
+    nextLocalEnv.OPENCLAW_STACK_IMAGE = localRuntimeImage;
   }
 
   return nextLocalEnv;

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 export const DEFAULT_DOCKER_MCP_SERVERS = ["docker", "fetch", "filesystem", "github-official", "playwright", "context7"];
-export const DOCKER_MCP_REQUIRED_RECOVERY = "Run `openclaw-repo-agent mcp setup` to reactivate the repo config and `openclaw-repo-agent mcp connect` to reconnect Codex.";
+export const DOCKER_MCP_REQUIRED_RECOVERY = "Run `openclaw-repo-agent mcp setup` to refresh this repo's Docker MCP config, then `openclaw-repo-agent mcp use` to activate it for Codex.";
 
 function sanitizeSecretSegment(value) {
   return String(value ?? "")

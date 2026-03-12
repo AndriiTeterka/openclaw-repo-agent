@@ -10,6 +10,12 @@ npx openclaw-repo-agent up
 npx openclaw-repo-agent pair
 ```
 
+For Codex/Docker MCP targeting, switch explicitly when needed:
+
+```bash
+npx openclaw-repo-agent mcp use
+```
+
 ## Requirements
 
 - Node.js 20 or newer
@@ -38,7 +44,7 @@ npx openclaw-repo-agent up
 npx openclaw-repo-agent pair
 ```
 
-`init` and `up` now automatically enforce the required Docker MCP setup for the current repo, reconnect Codex if needed, and sync configured credentials into Docker MCP secrets.
+`init` and `up` now prepare repo-local Docker MCP state and sync configured credentials into Docker MCP secrets, but they no longer repoint Docker MCP/Codex globally. Use `mcp use` explicitly when you want Codex to target the current repo.
 
 If the default prebuilt runtime image is unavailable, `up` automatically falls back to a local runtime build and persists that choice in `.openclaw/local.env`.
 
@@ -59,6 +65,13 @@ The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by
 
 If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
 
+Each initialized repo also gets a stable isolated runtime identity:
+
+- `OPENCLAW_INSTANCE_ID` is derived from the repo path
+- `OPENCLAW_GATEWAY_PORT` is auto-managed from a per-repo range by default
+- local runtime builds use an instance-specific image tag
+- Docker Compose uses an instance-specific project name
+
 Configuration precedence:
 
 1. CLI flags
@@ -76,9 +89,11 @@ Configuration precedence:
 - `doctor`: validate Docker, auth, render status, gateway health, and Telegram readiness
 - `verify`: run configured verification commands inside the gateway container
 - `update`: rerender state, refresh the runtime image, and rerun doctor checks
-- `mcp setup`: repair or reapply the required Docker MCP setup for the current repo
-- `mcp status`: show whether Docker MCP is pointed at this repo's generated config and whether Codex is connected
-- `mcp connect`: reconnect Codex globally to Docker MCP's gateway (`~/.codex/config.toml`)
+- `instances list`: show all registered repo instances on this machine plus live container state when available
+- `mcp setup`: prepare or refresh this repo's Docker MCP config and sync Docker MCP secrets
+- `mcp use`: activate this repo's Docker MCP config for Codex
+- `mcp status`: show whether this repo's Docker MCP config is active and whether Codex is targeting it
+- `mcp connect`: compatibility alias for `mcp use`
 - `config validate`: validate `.openclaw/plugin.json` as rendered into the project manifest
 - `config migrate`: rewrite `.openclaw/plugin.json` using the current CLI defaults
 
@@ -101,35 +116,39 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 - `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
 - `.openclaw/local.env` is the user-editable local override file; `.openclaw/state/runtime.env` is generated and should not be edited directly.
+- `.openclaw/local.env` now stores `OPENCLAW_INSTANCE_ID` and `OPENCLAW_PORT_MANAGED` so repo instances can be tracked and reallocated safely.
 - `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` still live in `.openclaw/local.env` for the OpenClaw runtime, but `init`/`up` mirror them into Docker MCP secrets automatically.
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
 - Telegram stream mode is configured with `OPENCLAW_TELEGRAM_STREAM_MODE` in `.openclaw/local.env`.
 - `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains local because it is a host path, not a keychain secret.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
-- The main gateway container name now matches the repo directory slug, so Docker Desktop is easier to scan when you have more than one repo.
+- Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
 - The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
+- Separate Telegram bot tokens are the supported concurrent multi-repo model. `up` now refuses to start two running repo instances with the same bot token.
 
 ## Docker MCP
 
-This project now treats Docker MCP as part of the default runtime workflow. `init` and `up` automatically keep Docker MCP pointed at the current repo and make sure Codex is connected to the Docker MCP gateway.
+This project now treats Docker MCP as repo-scoped setup plus explicit activation.
 
 Typical setup:
 
 ```bash
 npx openclaw-repo-agent init
 npx openclaw-repo-agent up
+npx openclaw-repo-agent mcp use
 ```
 
 What this does:
 
 - enables `docker`, `fetch`, `filesystem`, `github-official`, `playwright`, and `context7`
-- points Docker MCP at `.openclaw/state/docker-mcp.config.yaml`
-- connects Codex to `docker mcp gateway run`
+- prepares `.openclaw/state/docker-mcp.config.yaml` for this repo
 - mirrors configured `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and optional `GITHUB_PERSONAL_ACCESS_TOKEN` into Docker MCP secrets
+- activates the repo's Docker MCP config only when you run `mcp use`
+- reconnects Codex to `docker mcp gateway run` when you run `mcp use`
 
 External pairing:
 
@@ -143,12 +162,28 @@ npx openclaw-repo-agent pair --gateway-url ws://gateway.example/ws --gateway-tok
 
 Notes:
 
-- `mcp setup` updates Docker MCP's active config pointer globally; rerun it in the repo you want Docker MCP to target
-- `mcp connect` changes Codex's global config, not just the current repo
+- `mcp use` changes Docker MCP's active config pointer globally because Codex currently only supports global Docker MCP integration
+- `mcp connect` is kept as an alias to `mcp use` during migration
 - `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/local.env` and rerunning `init`, `up`, or `mcp setup`
 - `context7` is enabled permanently for version-specific documentation lookup
 - the repo-local Docker MCP config only scopes filesystem access for this repo; the other recommended servers do not need per-repo config
-- use `mcp setup` and `mcp connect` as repair commands if the automatic enforcement ever gets out of sync
+- use `mcp setup` and `mcp use` as repair commands if the repo-local config or Codex connection gets out of sync
+
+## Multi-Repo Runtime
+
+This project now supports running multiple repo-local OpenClaw gateways concurrently on one machine, with these safeguards:
+
+- one Compose project per repo instance
+- one managed gateway port per repo instance by default
+- one local runtime image tag per repo instance
+- one Telegram bot token per running repo instance
+- a machine-local instance registry used by `instances list`, `status`, and `doctor`
+
+If you want to switch Codex between repos, do it explicitly:
+
+```bash
+npx openclaw-repo-agent mcp use
+```
 
 ## Development
 

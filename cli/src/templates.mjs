@@ -1,4 +1,5 @@
 import { DEFAULT_OPENCLAW_IMAGE, DEFAULT_RUNTIME_IMAGE_REPOSITORY, PRODUCT_VERSION } from "./builtin-profiles.mjs";
+import { LEGACY_COMPOSE_PORT } from "./instance-registry.mjs";
 
 export function defaultInstructionsTemplate(projectName) {
   return `# Repo Agent Instructions
@@ -22,10 +23,13 @@ export function defaultKnowledgeTemplate(projectName) {
 `;
 }
 
-export function defaultLocalEnvExample(useLocalBuild = false) {
-  const stackImage = useLocalBuild
+export function defaultLocalEnvExample(useLocalBuild = false, values = {}) {
+  const stackImage = values.stackImage || (useLocalBuild
     ? "openclaw-repo-agent-runtime:local"
-    : `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`;
+    : `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`);
+  const gatewayPort = values.gatewayPort || String(LEGACY_COMPOSE_PORT);
+  const instanceId = values.instanceId || "";
+  const portManaged = values.portManaged ?? "true";
 
   return `# Local-only OpenClaw overrides for this repository.
 # Copy this file to .openclaw/local.env and fill in the required runtime values.
@@ -58,7 +62,9 @@ OPENCLAW_TELEGRAM_PROXY=
 OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY=true
 OPENCLAW_TOPIC_ACP=
 OPENCLAW_USE_LOCAL_BUILD=${useLocalBuild ? "true" : "false"}
-OPENCLAW_GATEWAY_PORT=18789
+OPENCLAW_INSTANCE_ID=${instanceId}
+OPENCLAW_PORT_MANAGED=${portManaged}
+OPENCLAW_GATEWAY_PORT=${gatewayPort}
 OPENCLAW_GATEWAY_BIND=lan
 OPENCLAW_GATEWAY_TOKEN=replace-with-a-long-random-token
 OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS=
@@ -117,6 +123,13 @@ export function renderComposeTemplate({ useLocalBuild }) {
   return `${buildSection}x-openclaw-common: &openclaw-common
 ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
   init: true
+  labels:
+    openclaw.product: \${OPENCLAW_PRODUCT_NAME}
+    openclaw.product-version: \${OPENCLAW_PRODUCT_VERSION}
+    openclaw.instance-id: \${OPENCLAW_INSTANCE_ID}
+    openclaw.repo-root: \${OPENCLAW_REPO_ROOT_HOST}
+    openclaw.compose-project: \${OPENCLAW_COMPOSE_PROJECT_NAME}
+    openclaw.telegram-token-hash: \${OPENCLAW_TELEGRAM_TOKEN_HASH}
   environment:
     HOME: /home/node
     TERM: xterm-256color
@@ -190,7 +203,6 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
 services:
   openclaw-gateway:
     <<: *openclaw-common
-    container_name: \${OPENCLAW_GATEWAY_CONTAINER_NAME}
     restart: unless-stopped
     ports:
       - "127.0.0.1:\${OPENCLAW_GATEWAY_PORT}:18789"

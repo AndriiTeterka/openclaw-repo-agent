@@ -20,10 +20,14 @@ test("defaultLocalEnvExample documents MCP credential sync", () => {
   assert.match(output, /\.openclaw\/ is git-ignored by default/);
   assert.match(output, /mirror configured API-style credentials into Docker MCP secrets automatically/);
   assert.match(output, /GITHUB_PERSONAL_ACCESS_TOKEN=/);
+  assert.match(output, /OPENCLAW_INSTANCE_ID=/);
+  assert.match(output, /OPENCLAW_PORT_MANAGED=true/);
 });
 
-test("renderComposeTemplate pins the gateway container name from runtime env", () => {
+test("renderComposeTemplate uses labels instead of a custom container name", () => {
   const output = renderComposeTemplate({ useLocalBuild: false });
 
-  assert.match(output, /container_name: \$\{OPENCLAW_GATEWAY_CONTAINER_NAME\}/);
+  assert.doesNotMatch(output, /container_name:/);
+  assert.match(output, /openclaw\.instance-id: \$\{OPENCLAW_INSTANCE_ID\}/);
+  assert.match(output, /openclaw\.compose-project: \$\{OPENCLAW_COMPOSE_PROJECT_NAME\}/);
 });

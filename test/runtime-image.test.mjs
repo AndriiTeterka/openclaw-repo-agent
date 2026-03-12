@@ -4,12 +4,13 @@ import path from "node:path";
 import test from "node:test";
 
 import { buildLocalRuntimeEnvOverrides, shouldAutoUseLocalBuild } from "../cli/src/runtime-image.mjs";
+import { deriveLocalRuntimeImage } from "../cli/src/instance-registry.mjs";
 
 test("shouldAutoUseLocalBuild falls back for denied access to the default image", () => {
   assert.equal(shouldAutoUseLocalBuild({
     useLocalBuild: false,
-    stackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.1.6-polyglot",
-    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.1.6-polyglot",
+    stackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.2.0-polyglot",
+    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.2.0-polyglot",
     errorOutput: "error from registry: denied"
   }), true);
 });
@@ -18,18 +19,19 @@ test("shouldAutoUseLocalBuild does not override a custom image reference", () =>
   assert.equal(shouldAutoUseLocalBuild({
     useLocalBuild: false,
     stackImage: "ghcr.io/private/custom-runtime:1.2.3",
-    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.1.6-polyglot",
+    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.2.0-polyglot",
     errorOutput: "error from registry: denied"
   }), false);
 });
 
 test("buildLocalRuntimeEnvOverrides enables local build and rewrites the default stack image", () => {
+  const localRuntimeImage = deriveLocalRuntimeImage("appium-test-project-deadbeef");
   const nextEnv = buildLocalRuntimeEnvOverrides({
-    OPENCLAW_STACK_IMAGE: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.1.6-polyglot"
-  }, "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.1.6-polyglot");
+    OPENCLAW_STACK_IMAGE: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.2.0-polyglot"
+  }, "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.2.0-polyglot", localRuntimeImage);
 
   assert.equal(nextEnv.OPENCLAW_USE_LOCAL_BUILD, "true");
-  assert.equal(nextEnv.OPENCLAW_STACK_IMAGE, "openclaw-repo-agent-runtime:local");
+  assert.equal(nextEnv.OPENCLAW_STACK_IMAGE, localRuntimeImage);
 });
 
 test("runtime Dockerfile installs the Codex CLI", async () => {
