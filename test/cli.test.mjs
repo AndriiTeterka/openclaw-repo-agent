@@ -36,7 +36,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.1.5");
+  assert.equal(stdout.trim(), "0.1.6");
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -53,7 +53,7 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.1.5");
+  assert.equal(payload.productVersion, "0.1.6");
 });
 
 test("deriveComposeProjectName uses the repo directory slug", () => {
