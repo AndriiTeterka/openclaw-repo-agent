@@ -1,8 +1,9 @@
 export const PRODUCT_NAME = "openclaw-repo-agent";
-export const PRODUCT_VERSION = "0.1.3";
+export const PRODUCT_VERSION = "0.1.4";
 export const DEFAULT_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/andriiteterka/openclaw-repo-agent-runtime";
 export const DEFAULT_OPENCLAW_IMAGE = "ghcr.io/openclaw/openclaw:latest";
 export const DEFAULT_NPM_PACKAGE_NAME = PRODUCT_NAME;
+export const DEFAULT_CODEX_MODEL = "openai-codex/gpt-5.4";
 
 const STABLE_TELEGRAM_DEFAULTS = {
   dmPolicy: "pairing",

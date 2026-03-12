@@ -59,3 +59,20 @@ test("buildOpenClawConfig prefers OPENCLAW_TELEGRAM_STREAM_MODE over the legacy 
 
   assert.equal(config.channels.telegram.streamMode, "off");
 });
+
+test("buildOpenClawConfig preserves the codex provider model format", () => {
+  const manifest = createManifest({
+    agent: {
+      id: "workspace",
+      defaultModel: "openai-codex/gpt-5.4"
+    },
+    acp: {
+      defaultAgent: "codex",
+      allowedAgents: ["codex"],
+      preferredMode: "oneshot"
+    }
+  });
+  const { config } = buildOpenClawConfig(manifest);
+
+  assert.equal(config.agents.defaults.model.primary, "openai-codex/gpt-5.4");
+});

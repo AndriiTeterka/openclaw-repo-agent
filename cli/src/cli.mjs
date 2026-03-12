@@ -1,4 +1,5 @@
 import https from "node:https";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { spawn } from "node:child_process";
@@ -22,6 +23,7 @@ import {
 } from "../../runtime/manifest-contract.mjs";
 import {
   BUILTIN_PROFILES,
+  DEFAULT_CODEX_MODEL,
   DEFAULT_NPM_PACKAGE_NAME,
   DEFAULT_OPENCLAW_IMAGE,
   DEFAULT_RUNTIME_IMAGE_REPOSITORY,
@@ -153,6 +155,46 @@ function defaultDeploymentProfile() {
 
 function defaultRuntimeImage() {
   return `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`;
+}
+
+function isCodexAgent(value) {
+  return String(value ?? "").trim().toLowerCase() === "codex";
+}
+
+function defaultAgentModelForAcpAgent(agentId) {
+  return isCodexAgent(agentId) ? DEFAULT_CODEX_MODEL : "";
+}
+
+function normalizeDefaultAgentModel(value, acpDefaultAgent) {
+  const normalized = String(value ?? "").trim();
+  return normalized || defaultAgentModelForAcpAgent(acpDefaultAgent);
+}
+
+function resolvePreferredAuthMode(rawAuthMode, acpDefaultAgent) {
+  const normalized = String(rawAuthMode ?? "").trim();
+  if (normalized) return normalizeAuthMode(normalized);
+  return isCodexAgent(acpDefaultAgent) ? "codex" : "external";
+}
+
+function shouldUpgradeLegacyCodexBootstrap({ cliAuthMode, localEnvAuthMode, pluginAuthMode, acpDefaultAgent }) {
+  if (!isCodexAgent(acpDefaultAgent)) return false;
+  if (String(cliAuthMode ?? "").trim()) return false;
+  if (String(localEnvAuthMode ?? "").trim()) return false;
+  return normalizeAuthMode(pluginAuthMode) === "external";
+}
+
+async function detectDefaultCodexAuthPath() {
+  const candidates = uniqueStrings([
+    process.env.CODEX_HOME,
+    path.join(os.homedir(), ".codex")
+  ]);
+
+  for (const candidate of candidates) {
+    const authFile = path.join(candidate, "auth.json");
+    if (await fileExists(authFile)) return toDockerPath(path.resolve(candidate));
+  }
+
+  return "";
 }
 
 function compareVersions(left, right) {
@@ -360,7 +402,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   const runtimeProfile = String(options.runtimeProfile ?? merged.runtimeProfile ?? "stable-chat").trim() || "stable-chat";
   const queueProfile = String(options.queueProfile ?? merged.queueProfile ?? runtimeProfile).trim() || runtimeProfile;
   const toolingProfile = String(options.toolingProfile ?? rawConfig?.toolingProfile ?? detection.toolingProfile ?? merged.toolingProfile ?? "none").trim() || "none";
-  const authMode = normalizeAuthMode(options.authMode ?? merged.security?.authBootstrapMode ?? "external");
   const requestedAllowedAgents = options.acpAllowedAgent?.length
     ? options.acpAllowedAgent
     : Array.isArray(merged.acp?.allowedAgents)
@@ -386,7 +427,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
 
   plugin.agent.id = String(plugin.agent.id ?? profileDefaults.agent.id ?? "workspace").trim() || "workspace";
   plugin.agent.name = String(plugin.agent.name ?? `${projectName} Workspace`).trim() || `${projectName} Workspace`;
-  plugin.agent.defaultModel = String(options.agentDefaultModel ?? plugin.agent.defaultModel ?? "").trim();
   plugin.agent.maxConcurrent = Number.isInteger(plugin.agent.maxConcurrent) && plugin.agent.maxConcurrent > 0 ? plugin.agent.maxConcurrent : 4;
   plugin.agent.skipBootstrap = resolveBoolean(plugin.agent.skipBootstrap, true);
   plugin.agent.verboseDefault = String(plugin.agent.verboseDefault ?? "off").trim() || "off";
@@ -426,7 +466,11 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
     maxChunkChars: Number.isInteger(plugin.acp.stream?.maxChunkChars) ? plugin.acp.stream.maxChunkChars : 1200
   };
 
-  plugin.security.authBootstrapMode = authMode;
+  plugin.agent.defaultModel = normalizeDefaultAgentModel(
+    options.agentDefaultModel ?? plugin.agent.defaultModel,
+    plugin.acp.defaultAgent
+  );
+  plugin.security.authBootstrapMode = resolvePreferredAuthMode(options.authMode ?? merged.security?.authBootstrapMode, plugin.acp.defaultAgent);
   plugin.security.commandLoggerEnabled = resolveBoolean(plugin.security.commandLoggerEnabled, true);
   plugin.security.toolDeny = uniqueStrings(plugin.security.toolDeny ?? ["process"]);
 
@@ -451,9 +495,16 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
   const queueProfile = localOverrideValue(options.queueProfile, localEnv.OPENCLAW_QUEUE_PROFILE, plugin.queueProfile || runtimeProfile);
   const toolingProfile = localOverrideValue(options.toolingProfile, localEnv.OPENCLAW_TOOLING_PROFILE, plugin.toolingProfile);
   const deploymentProfile = localOverrideValue(options.deploymentProfile, localEnv.OPENCLAW_DEPLOYMENT_PROFILE, plugin.deploymentProfile || defaultDeploymentProfile());
-  const authMode = normalizeAuthMode(localOverrideValue(options.authMode, localEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE, plugin.security.authBootstrapMode));
   const topicAcp = resolveBoolean(localOverrideValue(options.topicAcp, localEnv.OPENCLAW_TOPIC_ACP, false), false);
   const acpDefaultAgent = localOverrideValue(options.acpDefaultAgent, localEnv.OPENCLAW_ACP_DEFAULT_AGENT, plugin.acp.defaultAgent);
+  const authMode = shouldUpgradeLegacyCodexBootstrap({
+    cliAuthMode: options.authMode,
+    localEnvAuthMode: localEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE,
+    pluginAuthMode: plugin.security.authBootstrapMode,
+    acpDefaultAgent
+  })
+    ? "codex"
+    : normalizeAuthMode(localOverrideValue(options.authMode, localEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE, plugin.security.authBootstrapMode));
   const acpAllowedAgents = options.acpAllowedAgent?.length
     ? uniqueStrings(options.acpAllowedAgent)
     : parseFlexibleArray(localEnv.OPENCLAW_ACP_ALLOWED_AGENTS, plugin.acp.allowedAgents);
@@ -469,7 +520,10 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
     knowledgeFiles: options.knowledgeFile?.length ? options.knowledgeFile : plugin.knowledgeFiles,
     verificationCommands: options.verificationCommand?.length ? options.verificationCommand : plugin.verificationCommands,
     agent: {
-      defaultModel: localOverrideValue(options.agentDefaultModel, localEnv.OPENCLAW_AGENT_DEFAULT_MODEL, plugin.agent.defaultModel)
+      defaultModel: normalizeDefaultAgentModel(
+        localOverrideValue(options.agentDefaultModel, localEnv.OPENCLAW_AGENT_DEFAULT_MODEL, plugin.agent.defaultModel),
+        acpDefaultAgent
+      )
     },
     telegram: {
       dmPolicy: localOverrideValue(options.dmPolicy, localEnv.OPENCLAW_TELEGRAM_DM_POLICY, plugin.telegram.dmPolicy),
@@ -509,7 +563,7 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
   });
 }
 
-function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild) {
+function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild, defaultTargetAuthPath = "") {
   const defaults = {
     OPENCLAW_STACK_IMAGE: useLocalBuild ? "openclaw-repo-agent-runtime:local" : defaultRuntimeImage(),
     OPENCLAW_IMAGE: DEFAULT_OPENCLAW_IMAGE,
@@ -558,6 +612,10 @@ function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocal
     ...(options.groupAllowUser?.length ? { OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(normalizePrincipalArray(options.groupAllowUser)) } : {})
   };
 
+  if (!String(merged.TARGET_AUTH_PATH ?? "").trim() && defaultTargetAuthPath) {
+    merged.TARGET_AUTH_PATH = defaultTargetAuthPath;
+  }
+
   if (plugin.security.authBootstrapMode !== "codex" && !options.openaiApiKey && options.targetAuthPath == null) {
     merged.OPENAI_API_KEY = merged.OPENAI_API_KEY || "";
     merged.TARGET_AUTH_PATH = merged.TARGET_AUTH_PATH || "";
@@ -566,12 +624,13 @@ function buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocal
   return merged;
 }
 
-function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild) {
+function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCodexAuthPath = "") {
   const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || "18789";
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
     || JSON.stringify([`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`]);
-  const targetAuthPath = localEnv.TARGET_AUTH_PATH
-    ? path.resolve(localEnv.TARGET_AUTH_PATH.replace(/\//g, path.sep))
+  const effectiveTargetAuthPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim() || detectedCodexAuthPath;
+  const targetAuthPath = effectiveTargetAuthPath
+    ? path.resolve(effectiveTargetAuthPath.replace(/\//g, path.sep))
     : context.paths.emptyAuthDir;
 
   return {
@@ -682,6 +741,7 @@ async function prepareState(context, options = {}) {
 
   const plugin = normalizePluginConfig(pluginRaw, context.repoRoot, context.detection, options);
   const localEnv = await readEnvFile(context.paths.localEnvFile);
+  const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
   const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, localEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnv, options);
   const validationErrors = validateProjectManifest(manifest);
@@ -694,7 +754,7 @@ async function prepareState(context, options = {}) {
   await ensureDockerMcpConfig(context);
   await writeJsonFile(context.paths.manifestFile, manifest);
   await writeTextFile(context.paths.composeFile, renderComposeTemplate({ useLocalBuild }));
-  const runtimeEnv = buildRuntimeEnv(context, manifest, localEnv, useLocalBuild);
+  const runtimeEnv = buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCodexAuthPath);
   await writeEnvFile(context.paths.runtimeEnvFile, runtimeEnv);
 
   return {
@@ -702,7 +762,8 @@ async function prepareState(context, options = {}) {
     localEnv,
     manifest,
     runtimeEnv,
-    useLocalBuild
+    useLocalBuild,
+    detectedCodexAuthPath
   };
 }
 
@@ -926,7 +987,7 @@ function shouldPromptForAllowlist(policy, currentValues) {
   return policy === "allowlist" || currentValues.length > 0;
 }
 
-async function promptForInit(context, plugin, existingLocalEnv, options) {
+async function promptForInit(context, plugin, existingLocalEnv, options, detectedCodexAuthPath = "") {
   if (options.yes || options.nonInteractive || !process.stdin.isTTY || !process.stdout.isTTY) {
     return { plugin, localEnv: {} };
   }
@@ -981,8 +1042,16 @@ async function promptForInit(context, plugin, existingLocalEnv, options) {
       verificationCommands = verificationCommandsInput ? verificationCommandsInput.split(/\s*,\s*/g) : plugin.verificationCommands;
     }
 
-    const authMode = (await rl.question(`Auth mode [${plugin.security.authBootstrapMode}]: `)).trim() || plugin.security.authBootstrapMode;
     const acpDefaultAgent = await promptRequired(rl, "ACP default agent", plugin.acp.defaultAgent);
+    const defaultAuthMode = shouldUpgradeLegacyCodexBootstrap({
+      cliAuthMode: options.authMode,
+      localEnvAuthMode: existingLocalEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE,
+      pluginAuthMode: plugin.security.authBootstrapMode,
+      acpDefaultAgent
+    })
+      ? "codex"
+      : resolvePreferredAuthMode(plugin.security.authBootstrapMode, acpDefaultAgent);
+    const authMode = (await rl.question(`Auth mode [${defaultAuthMode}]: `)).trim() || defaultAuthMode;
     const dmPolicy = (await rl.question(`Telegram DM policy [${plugin.telegram.dmPolicy}]: `)).trim() || plugin.telegram.dmPolicy;
     const groupPolicy = (await rl.question(`Telegram group policy [${plugin.telegram.groupPolicy}]: `)).trim() || plugin.telegram.groupPolicy;
 
@@ -1002,7 +1071,7 @@ async function promptForInit(context, plugin, existingLocalEnv, options) {
       : (await rl.question(`Telegram bot token [${telegramTokenHint}]: `)).trim();
 
     let openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
-    let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "");
+    let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "") || detectedCodexAuthPath;
     if (authMode === "codex") {
       if (!openAiApiKey) {
         openAiApiKey = (await rl.question("OpenAI API key: ")).trim();
@@ -1082,10 +1151,11 @@ async function handleInit(context, options) {
   await ensureDir(context.paths.openclawDir);
   const existingPlugin = await readJsonFile(context.paths.pluginFile, null);
   const existingLocalEnv = await readEnvFile(context.paths.localEnvFile);
+  const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
   const basePlugin = normalizePluginConfig(existingPlugin ?? {}, context.repoRoot, context.detection, options);
   const initState = existingPlugin && !options.force
     ? { plugin: basePlugin, localEnv: {} }
-    : await promptForInit(context, basePlugin, existingLocalEnv, options);
+    : await promptForInit(context, basePlugin, existingLocalEnv, options, detectedCodexAuthPath);
   const plugin = initState.plugin;
   const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, existingLocalEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
 
@@ -1094,7 +1164,7 @@ async function handleInit(context, options) {
   }
 
   const localEnvValues = {
-    ...buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild),
+    ...buildLocalEnvTemplateValues(plugin, existingLocalEnv, options, useLocalBuild, detectedCodexAuthPath),
     ...initState.localEnv
   };
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnvValues, options);
@@ -1439,7 +1509,10 @@ async function handleDoctor(context, options) {
 
   const authPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim();
   const authPathExists = authPath ? await fileExists(authPath.replace(/\//g, path.sep)) : false;
-  const authOk = state.manifest.security.authBootstrapMode !== "codex" || authPathExists || Boolean(localEnv.OPENAI_API_KEY);
+  const authOk = state.manifest.security.authBootstrapMode !== "codex"
+    || authPathExists
+    || Boolean(state.detectedCodexAuthPath)
+    || Boolean(localEnv.OPENAI_API_KEY);
   pushCheck(
     results,
     "auth",

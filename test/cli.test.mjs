@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -32,7 +34,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.1.3");
+  assert.equal(stdout.trim(), "0.1.4");
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -49,5 +51,72 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.1.3");
+  assert.equal(payload.productVersion, "0.1.4");
+});
+
+test("config validation upgrades legacy codex repos to codex defaults", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-test-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  const codexHome = path.join(tempRoot, "codex-home");
+
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify({
+    version: 1,
+    profile: "custom",
+    projectName: "legacy-codex",
+    deploymentProfile: "docker-local",
+    toolingProfile: "none",
+    runtimeProfile: "stable-chat",
+    queueProfile: "stable-chat",
+    instructionFiles: [".openclaw/instructions.md"],
+    knowledgeFiles: [".openclaw/knowledge.md"],
+    verificationCommands: [],
+    agent: {
+      id: "workspace",
+      name: "Legacy Codex Workspace",
+      maxConcurrent: 4,
+      skipBootstrap: true,
+      defaultModel: ""
+    },
+    telegram: {
+      dmPolicy: "pairing",
+      groupPolicy: "disabled",
+      streamMode: "partial",
+      replyToMode: "first"
+    },
+    acp: {
+      defaultAgent: "codex",
+      allowedAgents: ["codex"],
+      preferredMode: "oneshot"
+    },
+    security: {
+      authBootstrapMode: "external"
+    }
+  }, null, 2));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "config",
+    "validate",
+    "--repo-root",
+    repoPath,
+    "--product-root=.",
+    "--json=true"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.plugin.agent.defaultModel, "openai-codex/gpt-5.4");
+  assert.equal(payload.plugin.security.authBootstrapMode, "external");
+  assert.equal(payload.manifest.agent.defaultModel, "openai-codex/gpt-5.4");
+  assert.equal(payload.manifest.security.authBootstrapMode, "codex");
 });

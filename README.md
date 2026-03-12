@@ -101,6 +101,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
 - Telegram stream mode is configured with `OPENCLAW_TELEGRAM_STREAM_MODE` in `.openclaw/local.env`.
 - `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains local because it is a host path, not a keychain secret.
+- If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
