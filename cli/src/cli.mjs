@@ -45,7 +45,12 @@ import {
   summarizeDockerMcpSecretPlan
 } from "./docker-mcp.mjs";
 import { detectRepository } from "./repository-detection.mjs";
-import { buildLocalRuntimeEnvOverrides, shouldAutoUseLocalBuild } from "./runtime-image.mjs";
+import {
+  buildLocalRuntimeEnvOverrides,
+  isManagedLocalRuntimeImage,
+  isManagedRemoteRuntimeImage,
+  shouldAutoUseLocalBuild
+} from "./runtime-image.mjs";
 import {
   allocateGatewayPort,
   buildInstanceMetadata,
@@ -203,6 +208,10 @@ function formatLegacyRuntimeImageWarning(context, currentImage) {
   return `Migrated legacy local runtime image ${currentImage} to ${context.localRuntimeImage}.`;
 }
 
+function summarizeManagedRuntimeImageMigration(nextImage) {
+  return `Updated managed runtime image to ${nextImage}.`;
+}
+
 async function updateInstanceRegistry(context, localEnv = {}) {
   return await upsertInstanceRegistryEntry(context.instanceRegistryFile, buildRegistryEntry(context, localEnv));
 }
@@ -240,13 +249,26 @@ async function ensureInstanceLocalEnv(context, localEnv, options = {}) {
 
   const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, nextLocalEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
   const currentStackImage = String(nextLocalEnv.OPENCLAW_STACK_IMAGE ?? "").trim();
-  if (useLocalBuild && (!currentStackImage || currentStackImage === defaultRuntimeImage() || currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE)) {
+  const currentDefaultRuntimeImage = defaultRuntimeImage();
+  const managedRemoteRuntimeImage = isManagedRemoteRuntimeImage(currentStackImage);
+  const managedLocalRuntimeImage = isManagedLocalRuntimeImage(currentStackImage, context.instanceId);
+  if (useLocalBuild && (!currentStackImage || currentStackImage === currentDefaultRuntimeImage || managedRemoteRuntimeImage || managedLocalRuntimeImage)) {
     if (currentStackImage !== context.localRuntimeImage) {
       nextLocalEnv.OPENCLAW_STACK_IMAGE = context.localRuntimeImage;
       changes.push(currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE
         ? formatLegacyRuntimeImageWarning(context, currentStackImage)
-        : "set repo-local runtime image");
+        : summarizeManagedRuntimeImageMigration(context.localRuntimeImage));
     }
+  }
+
+  if (!useLocalBuild && managedRemoteRuntimeImage && currentStackImage !== currentDefaultRuntimeImage) {
+    nextLocalEnv.OPENCLAW_STACK_IMAGE = currentDefaultRuntimeImage;
+    changes.push(summarizeManagedRuntimeImageMigration(currentDefaultRuntimeImage));
+  }
+
+  if (!useLocalBuild && managedLocalRuntimeImage) {
+    nextLocalEnv.OPENCLAW_STACK_IMAGE = currentDefaultRuntimeImage;
+    changes.push(summarizeManagedRuntimeImageMigration(currentDefaultRuntimeImage));
   }
 
   await updateInstanceRegistry(context, nextLocalEnv);
@@ -365,6 +387,57 @@ export function selectLatestPendingPairingRequest(payload) {
   }
 
   return requests[bestIndex];
+}
+
+function parseJsonOutput(output, fallback = null) {
+  try {
+    return JSON.parse(String(output ?? ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function pluralize(label, count) {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
+}
+
+function summarizeOpenClawStatusPayload(payload) {
+  const gateway = payload?.gateway ?? {};
+  const gatewayUrl = String(gateway.url ?? "").trim();
+  const gatewayVersion = String(gateway?.self?.version ?? "").trim();
+  const channelCount = Array.isArray(payload?.channelOrder)
+    ? payload.channelOrder.length
+    : Array.isArray(payload?.channelSummary)
+      ? payload.channelSummary.filter((line) => /^[A-Za-z]/.test(String(line ?? "").trim())).length
+      : 0;
+  const sessionCount = Number.isInteger(payload?.sessions?.count)
+    ? payload.sessions.count
+    : Number.isInteger(payload?.agents?.totalSessions)
+      ? payload.agents.totalSessions
+      : 0;
+
+  if (gateway.reachable === false) {
+    const errorDetail = String(gateway.error ?? gateway.authWarning ?? "").trim();
+    return `Gateway is not reachable at ${gatewayUrl || "the configured URL"}${errorDetail ? ` (${errorDetail})` : ""}.`;
+  }
+
+  const parts = [gatewayUrl ? `Gateway reachable at ${gatewayUrl}` : "Gateway is reachable"];
+  if (gatewayVersion) parts.push(`OpenClaw ${gatewayVersion}`);
+  parts.push(`${pluralize("channel", channelCount)} configured`);
+  parts.push(`${pluralize("session", sessionCount)} detected`);
+  return `${parts.join("; ")}.`;
+}
+
+function summarizeOpenClawHealthPayload(payload) {
+  const telegramProbe = payload?.channels?.telegram?.probe;
+  if (payload?.ok) {
+    const username = String(telegramProbe?.bot?.username ?? "").trim();
+    const elapsedMs = Number.isFinite(telegramProbe?.elapsedMs) ? telegramProbe.elapsedMs : null;
+    return `Gateway health RPC succeeded${username ? `; Telegram probe ok for @${username}` : ""}${elapsedMs != null ? ` (${elapsedMs} ms)` : ""}.`;
+  }
+
+  const detail = String(telegramProbe?.error ?? "").trim();
+  return `Gateway health RPC failed${detail ? ` (${detail})` : ""}.`;
 }
 
 function compareVersions(left, right) {
@@ -913,6 +986,16 @@ async function dockerCompose(context, args, options = {}) {
   return { code, stdout: "", stderr: "" };
 }
 
+function buildComposeUpArgs(useLocalBuild) {
+  const args = ["up", "-d", "--wait", "--wait-timeout", "90"];
+  if (useLocalBuild) args.push("--force-recreate");
+  return args;
+}
+
+async function ensureLocalRuntimeImageBuilt(context) {
+  await dockerCompose(context, ["build", "--pull", "openclaw-gateway"]);
+}
+
 async function openclawHostCommand(context, args, options = {}) {
   if (options.capture) {
     return await safeRunCommand("openclaw", args, { cwd: context.repoRoot });
@@ -1251,7 +1334,7 @@ async function ensureRuntimeImageReady(context, state, options = {}) {
     throw new Error(pullOutput || "Failed to pull the runtime image.");
   }
 
-  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage, context.localRuntimeImage);
+  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage, context.localRuntimeImage, context.instanceId);
   await writeEnvFile(context.paths.localEnvFile, nextLocalEnv, LOCAL_ENV_HEADER);
   nextState = await prepareState(context, { ...options, useLocalBuild: true });
   autoSwitchedToLocalBuild = true;
@@ -1687,9 +1770,10 @@ async function handleUp(context, options) {
     console.log("Remote runtime image is unavailable. Falling back to a local runtime build.");
   }
 
-  const args = ["up", "-d"];
-  if (state.useLocalBuild) args.push("--build");
-  await dockerCompose(context, args);
+  if (state.useLocalBuild) {
+    await ensureLocalRuntimeImageBuilt(context);
+  }
+  await dockerCompose(context, buildComposeUpArgs(state.useLocalBuild));
   if (mcp.actions.length > 0) {
     console.log(`Docker MCP setup: ${mcp.actions.join(", ")}.`);
   }
@@ -2005,7 +2089,7 @@ async function handleDoctor(context, options) {
       mcpStatus.profileActive,
       mcpStatus.profileActive ? "Docker MCP is using this repo's generated config." : "Docker MCP is ready, but another repo config is active.",
       mcpStatus.profileActive ? "" : DOCKER_MCP_REQUIRED_RECOVERY,
-      "warning"
+      "info"
     );
     pushCheck(
       results,
@@ -2015,7 +2099,7 @@ async function handleDoctor(context, options) {
         ? (codexTargetsRepoConfig(mcpStatus) ? "Codex is connected to this repo's Docker MCP gateway." : "Codex is installed, but not connected to this repo's Docker MCP config.")
         : "Codex is not installed.",
       codexTargetsRepoConfig(mcpStatus) ? "" : DOCKER_MCP_REQUIRED_RECOVERY,
-      "warning"
+      "info"
     );
     pushCheck(
       results,
@@ -2140,21 +2224,27 @@ async function handleDoctor(context, options) {
   );
 
   if (running) {
-    const status = await openclawGatewayCommand(context, ["status"], { capture: true });
+    const status = await openclawGatewayCommand(context, ["status", "--json"], { capture: true });
+    const statusPayload = status.code === 0 ? parseJsonOutput(status.stdout, null) : null;
     pushCheck(
       results,
       "openclaw-status",
       status.code === 0,
-      status.code === 0 ? (status.stdout.trim() || "OpenClaw status succeeded.") : (status.stderr.trim() || status.stdout.trim() || "OpenClaw status failed."),
+      status.code === 0
+        ? summarizeOpenClawStatusPayload(statusPayload)
+        : (status.stderr.trim() || status.stdout.trim() || "OpenClaw status failed."),
       status.code === 0 ? "" : "Inspect the gateway logs with `docker compose logs -f openclaw-gateway`."
     );
 
-    const channelStatus = await openclawGatewayCommand(context, ["channels", "status", "--probe"], { capture: true });
+    const channelStatus = await openclawGatewayCommand(context, ["health", "--json"], { capture: true });
+    const healthPayload = channelStatus.code === 0 ? parseJsonOutput(channelStatus.stdout, null) : null;
     pushCheck(
       results,
       "pairing",
       channelStatus.code === 0,
-      channelStatus.code === 0 ? "Telegram pairing/channel probe succeeded." : (channelStatus.stderr.trim() || channelStatus.stdout.trim() || "Telegram pairing/channel probe failed."),
+      channelStatus.code === 0
+        ? summarizeOpenClawHealthPayload(healthPayload)
+        : (channelStatus.stderr.trim() || channelStatus.stdout.trim() || "Telegram pairing/channel probe failed."),
       channelStatus.code === 0 ? "" : "Run `openclaw-repo-agent pair` after fixing token or network issues."
     );
 
@@ -2176,22 +2266,25 @@ async function handleDoctor(context, options) {
       workspaceAccess.code === 0 ? "" : "Check TARGET_REPO_PATH and GENERATED_MANIFEST_PATH in the rendered runtime env."
     );
 
-    const healthz = await dockerCompose(context, ["exec", "openclaw-gateway", "node", "-e", "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], { capture: true });
+    const healthz = await openclawGatewayCommand(context, ["health", "--json"], { capture: true });
+    const gatewayHealthPayload = healthz.code === 0 ? parseJsonOutput(healthz.stdout, null) : null;
     pushCheck(
       results,
-      "healthz",
+      "health",
       healthz.code === 0,
-      healthz.code === 0 ? "Gateway health endpoint is reachable." : "Gateway health endpoint check failed.",
+      healthz.code === 0 ? summarizeOpenClawHealthPayload(gatewayHealthPayload) : "Gateway health check failed.",
       healthz.code === 0 ? "" : "Inspect `docker compose logs -f openclaw-gateway` for runtime failures."
     );
   }
 
-  const ok = results.every((result) => result.ok || result.level === "warning");
+  const ok = results.every((result) => result.ok || result.level !== "error");
   if (options.json) {
     console.log(JSON.stringify({ ok, results }, null, 2));
   } else {
     for (const result of results) {
-      const statusLabel = result.ok ? "OK" : (result.level === "warning" ? "WARN" : "FAIL");
+      const statusLabel = result.ok
+        ? "OK"
+        : (result.level === "info" ? "INFO" : (result.level === "warning" ? "WARN" : "FAIL"));
       console.log(`${statusLabel} ${result.key}: ${result.detail}`);
       if (!result.ok && result.recovery) console.log(`Next step: ${result.recovery}`);
     }
@@ -2226,9 +2319,10 @@ async function handleUpdate(context, options) {
     }, ["down", "--remove-orphans"]);
   }
   if (await gatewayRunning(context)) {
-    const args = ["up", "-d"];
-    if (state.useLocalBuild) args.push("--build");
-    await dockerCompose(context, args);
+    if (state.useLocalBuild) {
+      await ensureLocalRuntimeImageBuilt(context);
+    }
+    await dockerCompose(context, buildComposeUpArgs(state.useLocalBuild));
   }
   if (!workspaceSkills.ok) {
     for (const failure of workspaceSkills.failures) {

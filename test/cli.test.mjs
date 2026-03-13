@@ -54,7 +54,7 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.3.0");
+  assert.equal(stdout.trim(), "0.3.1");
 });
 
 test("ACP init choices include the supported built-in agents", () => {
@@ -116,7 +116,7 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.3.0");
+  assert.equal(payload.productVersion, "0.3.1");
 });
 
 test("deriveComposeProjectName uses the repo identity and prefix", () => {
@@ -156,7 +156,7 @@ test("instances list reads the machine-local registry", async () => {
         gatewayPort: "20001",
         portManaged: true,
         telegramTokenHash: "",
-        localRuntimeImage: "openclaw-repo-agent-runtime:0.3.0-repo-one-deadbeef",
+        localRuntimeImage: "openclaw-repo-agent-runtime:0.3.1-repo-one-deadbeef",
         dockerMcpProfile: "openclaw-repo-one-deadbeef",
         lastSeenAt: "2026-03-12T00:00:00.000Z"
       }

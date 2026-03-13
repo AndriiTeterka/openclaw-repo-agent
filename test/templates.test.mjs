@@ -37,6 +37,8 @@ test("renderComposeTemplate uses labels instead of a custom container name", () 
   assert.match(output, /openclaw\.instance-id: \$\{OPENCLAW_INSTANCE_ID\}/);
   assert.match(output, /openclaw\.compose-project: \$\{OPENCLAW_COMPOSE_PROJECT_NAME\}/);
   assert.match(output, /OPENCLAW_WORKSPACE_SKILLS_DIR: \$\{OPENCLAW_WORKSPACE_SKILLS_DIR\}/);
+  assert.match(output, /127\.0\.0\.1:\$\{OPENCLAW_GATEWAY_PORT\}:\$\{OPENCLAW_GATEWAY_PORT\}/);
+  assert.match(output, /"openclaw",\s*"health",\s*"--timeout",\s*"5000"/);
 });
 
 test("default templates mention the mandatory workspace skill flow", () => {

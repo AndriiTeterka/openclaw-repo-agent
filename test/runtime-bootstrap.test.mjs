@@ -17,4 +17,5 @@ test("runtime entrypoint accepts either a local or bundled acpx plugin", async (
 
   assert.doesNotMatch(entrypoint, /openclaw plugins install @openclaw\/acpx/);
   assert.match(entrypoint, /bundled_manifest="\/app\/extensions\/acpx\/openclaw.plugin.json"/);
+  assert.match(entrypoint, /chmod 700 \/home\/node\/\.openclaw \/home\/node\/\.openclaw\/runtime/);
 });

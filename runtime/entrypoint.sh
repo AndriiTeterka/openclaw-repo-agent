@@ -3,6 +3,7 @@ set -eu
 
 prepare_runtime_directories() {
   mkdir -p /home/node/.openclaw /home/node/.openclaw/runtime /home/node/.gradle-openclaw
+  chmod 700 /home/node/.openclaw /home/node/.openclaw/runtime 2>/dev/null || true
 }
 
 export_optional_java_home() {

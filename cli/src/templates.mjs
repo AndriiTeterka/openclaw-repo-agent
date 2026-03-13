@@ -211,14 +211,15 @@ services:
     <<: *openclaw-common
     restart: unless-stopped
     ports:
-      - "127.0.0.1:\${OPENCLAW_GATEWAY_PORT}:18789"
+      - "127.0.0.1:\${OPENCLAW_GATEWAY_PORT}:\${OPENCLAW_GATEWAY_PORT}"
     healthcheck:
       test:
         [
           "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          "openclaw",
+          "health",
+          "--timeout",
+          "5000"
         ]
       interval: 30s
       timeout: 5s
