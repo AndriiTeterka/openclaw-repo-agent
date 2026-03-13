@@ -28,8 +28,7 @@ import {
   DEFAULT_OPENCLAW_IMAGE,
   DEFAULT_RUNTIME_IMAGE_REPOSITORY,
   PRODUCT_NAME,
-  PRODUCT_VERSION,
-  listBuiltinProfileNames
+  PRODUCT_VERSION
 } from "./builtin-profiles.mjs";
 import {
   defaultInstructionsTemplate,
@@ -61,6 +60,13 @@ import {
   shouldManageGatewayPort,
   upsertInstanceRegistryEntry
 } from "./instance-registry.mjs";
+import {
+  normalizeWorkspaceSkillsConfig,
+  readWorkspaceSkillsStatus,
+  summarizeWorkspaceSkillFailures,
+  summarizeWorkspaceSkillsStatus,
+  syncWorkspaceSkills
+} from "./workspace-skills.mjs";
 
 const ARRAY_FLAGS = new Set([
   "instruction-file",
@@ -118,12 +124,26 @@ const DEFAULT_STATE_MANIFEST_FILE = "project-manifest.json";
 const DEFAULT_STATE_ENV_FILE = "runtime.env";
 const DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE = "docker-mcp.config.yaml";
 const DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE = "docker-mcp.secrets.json";
+const DEFAULT_STATE_SKILLS_STATUS_FILE = "skills-status.json";
 const DEFAULT_LOCAL_ENV_FILE = "local.env";
 const DEFAULT_LOCAL_ENV_EXAMPLE_FILE = "local.env.example";
 const DEFAULT_PLUGIN_FILE = "plugin.json";
 const DEFAULT_INSTRUCTIONS_FILE = "instructions.md";
 const DEFAULT_KNOWLEDGE_FILE = "knowledge.md";
 const LOCAL_ENV_HEADER = "Local-only OpenClaw configuration. Keep this file out of git.";
+
+export const ACP_AGENT_CHOICES = [
+  { value: "codex", label: "codex" },
+  { value: "claude", label: "claude" },
+  { value: "gemini", label: "gemini" },
+  { value: "opencode", label: "opencode" },
+  { value: "pi", label: "pi" }
+];
+
+export const CODEX_AUTH_SOURCE_CHOICES = [
+  { value: "auth-folder", label: "Use existing Codex login folder" },
+  { value: "api-key", label: "Use OpenAI API key" }
+];
 
 function uniqueStrings(values) {
   return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -475,6 +495,7 @@ function resolvePaths(repoRoot) {
     runtimeEnvFile: path.join(stateDir, DEFAULT_STATE_ENV_FILE),
     dockerMcpConfigFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE),
     dockerMcpSecretsFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE),
+    skillsStatusFile: path.join(stateDir, DEFAULT_STATE_SKILLS_STATUS_FILE),
     emptyAuthDir: path.join(stateDir, "auth-empty")
   };
 }
@@ -569,6 +590,7 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
     instructionFiles: uniqueStrings(instructionFiles),
     knowledgeFiles: uniqueStrings(knowledgeFiles.length > 0 ? knowledgeFiles : [".openclaw/knowledge.md"]),
     verificationCommands: uniqueStrings(verificationCommands),
+    skills: deepMerge(merged.skills ?? {}),
     agent: deepMerge(merged.agent ?? {}),
     telegram: deepMerge(merged.telegram ?? {}),
     acp: deepMerge(merged.acp ?? {}),
@@ -605,6 +627,8 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   delete plugin.telegram.allowFrom;
   delete plugin.telegram.groupAllowFrom;
   delete plugin.telegram.proxy;
+
+  plugin.skills = normalizeWorkspaceSkillsConfig(plugin.skills);
 
   plugin.acp.defaultAgent = String(options.acpDefaultAgent ?? plugin.acp.defaultAgent ?? "").trim();
   plugin.acp.allowedAgents = normalizeAllowedAgents(plugin.acp.defaultAgent, requestedAllowedAgents);
@@ -776,7 +800,7 @@ function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options,
   return merged;
 }
 
-function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCodexAuthPath = "") {
+function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, detectedCodexAuthPath = "") {
   const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || String(LEGACY_COMPOSE_PORT);
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
     || JSON.stringify([`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`]);
@@ -785,6 +809,11 @@ function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCod
     ? path.resolve(effectiveTargetAuthPath.replace(/\//g, path.sep))
     : context.paths.emptyAuthDir;
   const telegramTokenHash = fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN);
+  const workspaceSkills = normalizeWorkspaceSkillsConfig(plugin.skills);
+  const workspaceSkillsDir = String(workspaceSkills.directory).replace(/\\/g, "/").replace(/^\.\//, "");
+  const workspaceSkillsContainerPath = workspaceSkillsDir.startsWith("/")
+    ? workspaceSkillsDir
+    : path.posix.join("/workspace", workspaceSkillsDir);
 
   return {
     OPENCLAW_COMPOSE_PROJECT_NAME: context.composeProjectName,
@@ -803,6 +832,7 @@ function buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCod
     OPENCLAW_GATEWAY_TOKEN: localEnv.OPENCLAW_GATEWAY_TOKEN || randomToken(),
     OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: controlUiOrigins,
     OPENCLAW_REPO_ROOT_HOST: toDockerPath(context.repoRoot),
+    OPENCLAW_WORKSPACE_SKILLS_DIR: workspaceSkillsContainerPath,
     OPENCLAW_TELEGRAM_TOKEN_HASH: telegramTokenHash,
     TELEGRAM_BOT_TOKEN: localEnv.TELEGRAM_BOT_TOKEN || "",
     OPENAI_API_KEY: localEnv.OPENAI_API_KEY || "",
@@ -1080,7 +1110,7 @@ async function prepareState(context, options = {}) {
   await ensureDockerMcpConfig(context);
   await writeJsonFile(context.paths.manifestFile, manifest);
   await writeTextFile(context.paths.composeFile, renderComposeTemplate({ useLocalBuild }));
-  const runtimeEnv = buildRuntimeEnv(context, manifest, localEnv, useLocalBuild, detectedCodexAuthPath);
+  const runtimeEnv = buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, detectedCodexAuthPath);
   await writeEnvFile(context.paths.runtimeEnvFile, runtimeEnv);
 
   return {
@@ -1176,6 +1206,24 @@ function emptyDockerMcpSecretStatus() {
     missingConfiguredSecrets: [],
     managedSecretNames: [],
     configuredSecretNames: []
+  };
+}
+
+async function readWorkspaceSkillHealth(context, plugin) {
+  const status = await readWorkspaceSkillsStatus(context, plugin.skills);
+  return {
+    status,
+    ...summarizeWorkspaceSkillsStatus(status),
+    failures: summarizeWorkspaceSkillFailures(status)
+  };
+}
+
+async function ensureWorkspaceSkillBaseline(context, plugin) {
+  const sync = await syncWorkspaceSkills(context, plugin.skills);
+  const health = await readWorkspaceSkillHealth(context, plugin);
+  return {
+    ...sync,
+    ...health
   };
 }
 
@@ -1338,16 +1386,37 @@ async function promptRequired(rl, label, fallback = "") {
   }
 }
 
-function parsePromptPrincipals(value, fallback = []) {
-  return normalizePrincipalArray(parseFlexibleArray(value, fallback));
+export async function promptChoice(rl, label, choices, fallbackValue) {
+  const defaultIndex = Math.max(choices.findIndex((choice) => choice.value === fallbackValue), 0);
+  console.log(`${label}:`);
+  choices.forEach((choice, index) => {
+    console.log(`  ${index + 1}. ${choice.label}${index === defaultIndex ? " (default)" : ""}`);
+  });
+
+  while (true) {
+    const answer = (await rl.question(`Choose ${label.toLowerCase()} [${defaultIndex + 1}]: `)).trim();
+    if (!answer) return choices[defaultIndex].value;
+
+    const numericIndex = Number.parseInt(answer, 10);
+    if (Number.isInteger(numericIndex) && numericIndex >= 1 && numericIndex <= choices.length) {
+      return choices[numericIndex - 1].value;
+    }
+
+    const exact = choices.find((choice) => choice.value === answer);
+    if (exact) return exact.value;
+
+    console.log(`Enter a number between 1 and ${choices.length}, or one of: ${choices.map((choice) => choice.value).join(", ")}.`);
+  }
 }
 
-function formatPromptList(values) {
-  return values.length > 0 ? values.join(", ") : "(none)";
-}
+export function defaultCodexAuthSource(existingLocalEnv, options, detectedCodexAuthPath = "") {
+  if (String(options.targetAuthPath ?? "").trim()) return "auth-folder";
+  if (String(options.openaiApiKey ?? "").trim()) return "api-key";
 
-function shouldPromptForAllowlist(policy, currentValues) {
-  return policy === "allowlist" || currentValues.length > 0;
+  const existingTargetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "").trim() || detectedCodexAuthPath;
+  if (existingTargetAuthPath) return "auth-folder";
+  if (String(existingLocalEnv.OPENAI_API_KEY ?? "").trim()) return "api-key";
+  return "auth-folder";
 }
 
 async function promptForInit(context, plugin, existingLocalEnv, options, detectedCodexAuthPath = "") {
@@ -1361,71 +1430,17 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
   });
 
   try {
-    console.log("Detected repo settings:");
-    console.log(`- Project: ${plugin.projectName}`);
-    console.log(`- Tooling profile: ${plugin.toolingProfile}`);
-    console.log(`- Deployment profile: ${plugin.deploymentProfile}`);
-    console.log(`- Runtime profile: ${plugin.runtimeProfile}`);
-    console.log(`- Queue profile: ${plugin.queueProfile}`);
-    console.log(`- Instruction files: ${formatPromptList(plugin.instructionFiles)}`);
-    console.log(`- Knowledge files: ${formatPromptList(plugin.knowledgeFiles)}`);
-    console.log(`- Verification commands: ${formatPromptList(plugin.verificationCommands)}`);
-    console.log("Use CLI flags or edit .openclaw/plugin.json later if you need to override these.");
+    const profile = plugin.profile;
+    const projectName = plugin.projectName;
+    const toolingProfile = plugin.toolingProfile;
+    const deploymentProfile = plugin.deploymentProfile;
+    const runtimeProfile = plugin.runtimeProfile;
+    const queueProfile = plugin.queueProfile;
+    const instructionFiles = plugin.instructionFiles;
+    const knowledgeFiles = plugin.knowledgeFiles;
+    const verificationCommands = plugin.verificationCommands;
 
-    const customizeDetectedSettings = parseBooleanString(
-      (await rl.question("Override detected repo settings now [no]: ")).trim(),
-      false
-    );
-
-    let projectName = plugin.projectName;
-    let profile = plugin.profile;
-    let toolingProfile = plugin.toolingProfile;
-    let deploymentProfile = plugin.deploymentProfile;
-    let runtimeProfile = plugin.runtimeProfile;
-    let queueProfile = plugin.queueProfile;
-    let instructionFiles = plugin.instructionFiles;
-    let knowledgeFiles = plugin.knowledgeFiles;
-    let verificationCommands = plugin.verificationCommands;
-
-    if (customizeDetectedSettings) {
-      if (listBuiltinProfileNames().length > 1) {
-        const availableProfiles = listBuiltinProfileNames().join(", ");
-        profile = (await rl.question(`Preset profile [${plugin.profile}] (${availableProfiles}): `)).trim() || plugin.profile;
-      }
-      projectName = (await rl.question(`Project name [${plugin.projectName}]: `)).trim() || plugin.projectName;
-      toolingProfile = (await rl.question(`Tooling profile [${plugin.toolingProfile}]: `)).trim() || plugin.toolingProfile;
-      deploymentProfile = (await rl.question(`Deployment profile [${plugin.deploymentProfile}]: `)).trim() || plugin.deploymentProfile;
-      runtimeProfile = (await rl.question(`Runtime profile [${plugin.runtimeProfile}]: `)).trim() || plugin.runtimeProfile;
-      queueProfile = (await rl.question(`Queue profile [${plugin.queueProfile}]: `)).trim() || plugin.queueProfile;
-      const instructionFilesInput = (await rl.question(`Instruction files [${plugin.instructionFiles.join(", ")}]: `)).trim();
-      const knowledgeFilesInput = (await rl.question(`Knowledge files [${plugin.knowledgeFiles.join(", ")}]: `)).trim();
-      const verificationCommandsInput = (await rl.question(`Verification commands [${plugin.verificationCommands.join(", ")}]: `)).trim();
-      instructionFiles = instructionFilesInput ? instructionFilesInput.split(/\s*,\s*/g) : plugin.instructionFiles;
-      knowledgeFiles = knowledgeFilesInput ? knowledgeFilesInput.split(/\s*,\s*/g) : plugin.knowledgeFiles;
-      verificationCommands = verificationCommandsInput ? verificationCommandsInput.split(/\s*,\s*/g) : plugin.verificationCommands;
-    }
-
-    const acpDefaultAgent = await promptRequired(rl, "ACP default agent", plugin.acp.defaultAgent || "codex");
-    const defaultAuthMode = shouldUpgradeLegacyCodexBootstrap({
-      cliAuthMode: options.authMode,
-      localEnvAuthMode: existingLocalEnv.OPENCLAW_BOOTSTRAP_AUTH_MODE,
-      pluginAuthMode: plugin.security.authBootstrapMode,
-      acpDefaultAgent
-    })
-      ? "codex"
-      : resolvePreferredAuthMode(plugin.security.authBootstrapMode, acpDefaultAgent);
-    const authMode = (await rl.question(`Auth mode [${defaultAuthMode}]: `)).trim() || defaultAuthMode;
-    const dmPolicy = (await rl.question(`Telegram DM policy [${plugin.telegram.dmPolicy}]: `)).trim() || plugin.telegram.dmPolicy;
-    const groupPolicy = (await rl.question(`Telegram group policy [${plugin.telegram.groupPolicy}]: `)).trim() || plugin.telegram.groupPolicy;
-
-    const currentAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []);
-    const currentGroupAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []);
-    const allowUsersInput = shouldPromptForAllowlist(dmPolicy, currentAllowUsers)
-      ? (await rl.question(`Telegram DM allowlist [${currentAllowUsers.join(", ")}]: `)).trim()
-      : "";
-    const groupAllowUsersInput = shouldPromptForAllowlist(groupPolicy, currentGroupAllowUsers)
-      ? (await rl.question(`Telegram group allowlist [${currentGroupAllowUsers.join(", ")}]: `)).trim()
-      : "";
+    const acpDefaultAgent = await promptChoice(rl, "ACP default agent", ACP_AGENT_CHOICES, plugin.acp.defaultAgent || "codex");
 
     const hasTelegramToken = Boolean(existingLocalEnv.TELEGRAM_BOT_TOKEN) && !String(existingLocalEnv.TELEGRAM_BOT_TOKEN).startsWith("replace-with-");
     const telegramTokenHint = hasTelegramToken ? "configured" : "replace-with-your-botfather-token";
@@ -1435,13 +1450,31 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
 
     let openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
     let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "") || detectedCodexAuthPath;
-    if (authMode === "codex") {
-      if (!targetAuthPath) {
-        targetAuthPath = (await rl.question("Codex auth path: ")).trim();
+    let authMode = resolvePreferredAuthMode(plugin.security.authBootstrapMode, acpDefaultAgent);
+
+    if (acpDefaultAgent === "codex") {
+      const authSource = await promptChoice(
+        rl,
+        "Codex auth source",
+        CODEX_AUTH_SOURCE_CHOICES,
+        defaultCodexAuthSource(existingLocalEnv, options, detectedCodexAuthPath)
+      );
+
+      authMode = "codex";
+      if (authSource === "auth-folder") {
+        openAiApiKey = "";
+        if (!targetAuthPath) {
+          targetAuthPath = await promptRequired(rl, "Codex login folder");
+        }
+      } else {
+        targetAuthPath = "";
+        openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
+        if (!openAiApiKey) {
+          openAiApiKey = await promptRequired(rl, "OpenAI API key");
+        }
       }
-      if (!targetAuthPath && !openAiApiKey) {
-        openAiApiKey = (await rl.question("OpenAI API key (optional if Codex auth is already configured elsewhere): ")).trim();
-      }
+    } else {
+      authMode = "external";
     }
 
     const acpAllowedAgents = normalizeAllowedAgents(acpDefaultAgent, plugin.acp.allowedAgents);
@@ -1460,11 +1493,6 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
         defaultAgent: acpDefaultAgent,
         allowedAgents: acpAllowedAgents
       },
-      telegram: {
-        ...plugin.telegram,
-        dmPolicy,
-        groupPolicy
-      },
       security: {
         ...plugin.security,
         authBootstrapMode: authMode
@@ -1480,27 +1508,19 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
       authMode,
       acpDefaultAgent,
       acpAllowedAgent: acpAllowedAgents,
-      dmPolicy,
-      groupPolicy,
       instructionFile: instructionFiles,
       knowledgeFile: knowledgeFiles,
       verificationCommand: verificationCommands
     });
 
+    const currentAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []);
+    const currentGroupAllowUsers = parseFlexibleArray(existingLocalEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []);
     return {
       plugin: nextPlugin,
       localEnv: {
         TELEGRAM_BOT_TOKEN: telegramBotTokenInput || (hasTelegramToken ? existingLocalEnv.TELEGRAM_BOT_TOKEN : "replace-with-your-botfather-token"),
-        OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(
-          shouldPromptForAllowlist(dmPolicy, currentAllowUsers)
-            ? parsePromptPrincipals(allowUsersInput, currentAllowUsers)
-            : currentAllowUsers
-        ),
-        OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(
-          shouldPromptForAllowlist(groupPolicy, currentGroupAllowUsers)
-            ? parsePromptPrincipals(groupAllowUsersInput, currentGroupAllowUsers)
-            : currentGroupAllowUsers
-        ),
+        OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(currentAllowUsers),
+        OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(currentGroupAllowUsers),
         OPENAI_API_KEY: authMode === "codex" ? openAiApiKey : "",
         TARGET_AUTH_PATH: authMode === "codex" && targetAuthPath ? toDockerPath(path.resolve(targetAuthPath)) : ""
       }
@@ -1536,9 +1556,10 @@ async function handleInit(context, options) {
     throw new Error(`Cannot initialize workspace: ${validationErrors.join("; ")}`);
   }
 
-  if (!existingPlugin || options.force) {
+  const shouldWritePlugin = !existingPlugin || options.force || JSON.stringify(existingPlugin) !== JSON.stringify(plugin);
+  if (shouldWritePlugin) {
     await writeJsonFile(context.paths.pluginFile, plugin);
-    console.log(`Wrote ${path.relative(context.repoRoot, context.paths.pluginFile)}`);
+    console.log(`${existingPlugin ? "Updated" : "Wrote"} ${path.relative(context.repoRoot, context.paths.pluginFile)}`);
   } else {
     console.log(`Keeping existing ${path.relative(context.repoRoot, context.paths.pluginFile)}`);
   }
@@ -1570,18 +1591,26 @@ async function handleInit(context, options) {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
+  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, plugin);
   const registeredConflicts = findRegisteredTelegramTokenConflicts(context, state.instanceRegistry, state.localEnv);
 
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.localEnvFile)}`);
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.manifestFile)}`);
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.composeFile)}`);
   console.log(`Prepared ${path.relative(context.repoRoot, context.paths.dockerMcpConfigFile)}`);
+  console.log(`Prepared ${plugin.skills.directory}`);
   console.log(`Detected preset: ${plugin.profile}`);
   console.log(`Effective tooling profile: ${state.manifest.toolingProfile}`);
   console.log(`Instance: ${context.instanceId}`);
   console.log(`Compose project: ${context.composeProjectName}`);
   console.log(`Docker MCP profile: ${context.dockerMcpProfile}`);
   console.log(`Docker MCP: ${mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready"}`);
+  console.log(`Workspace skills: ${workspaceSkills.readyCount}/${workspaceSkills.configuredCount} ready`);
+  if (!workspaceSkills.ok) {
+    for (const failure of workspaceSkills.failures) {
+      console.log(`Warning: workspace skill not ready: ${failure}`);
+    }
+  }
   if (registeredConflicts.length > 0) {
     console.log(`Warning: this Telegram bot token is also configured in ${registeredConflicts.length} other registered repo instance(s).`);
   }
@@ -1628,7 +1657,14 @@ async function handleUp(context, options) {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
+  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, state.plugin);
   if (state.manifest.deploymentProfile === "native-dev") {
+    console.log(`Workspace skills: ${workspaceSkills.readyCount}/${workspaceSkills.configuredCount} ready.`);
+    if (!workspaceSkills.ok) {
+      for (const failure of workspaceSkills.failures) {
+        console.log(`Warning: workspace skill not ready: ${failure}`);
+      }
+    }
     console.log("Deployment profile is native-dev.");
     console.log(`Use ${path.relative(context.repoRoot, context.paths.manifestFile)} with the official OpenClaw onboarding flow.`);
     return;
@@ -1656,6 +1692,12 @@ async function handleUp(context, options) {
   await dockerCompose(context, args);
   if (mcp.actions.length > 0) {
     console.log(`Docker MCP setup: ${mcp.actions.join(", ")}.`);
+  }
+  console.log(`Workspace skills: ${workspaceSkills.readyCount}/${workspaceSkills.configuredCount} ready.`);
+  if (!workspaceSkills.ok) {
+    for (const failure of workspaceSkills.failures) {
+      console.log(`Warning: workspace skill not ready: ${failure}`);
+    }
   }
   if (!mcp.profileActive || !codexTargetsRepoConfig(mcp)) {
     console.log(`Docker MCP profile ${context.dockerMcpProfile} is ready but not active. Run \`${PRODUCT_NAME} mcp use\` when you want Codex to target this repo.`);
@@ -1828,6 +1870,7 @@ async function checkLatestPackageVersion(packageName) {
 
 async function handleStatus(context, options) {
   const state = await prepareState(context, options);
+  const workspaceSkills = await readWorkspaceSkillHealth(context, state.plugin);
   const packageName = process.env.NPM_PACKAGE_NAME || DEFAULT_NPM_PACKAGE_NAME;
   const latestVersion = options.checkUpdates ? await checkLatestPackageVersion(packageName) : null;
   const updateStatus = latestVersion
@@ -1858,6 +1901,13 @@ async function handleStatus(context, options) {
       queueProfile: state.manifest.queueProfile,
       authMode: state.manifest.security.authBootstrapMode,
       verificationCommands: state.manifest.verificationCommands
+    },
+    skills: {
+      directory: workspaceSkills.status.directory,
+      configuredCount: workspaceSkills.configuredCount,
+      readyCount: workspaceSkills.readyCount,
+      ok: workspaceSkills.ok,
+      entries: workspaceSkills.status.skills
     }
   };
   const dockerMcpAvailable = (await dockerMcpCapture(["--help"], context.repoRoot)).code === 0;
@@ -1891,10 +1941,16 @@ async function handleStatus(context, options) {
     console.log(`Queue: ${state.manifest.queueProfile}`);
     console.log(`Auth: ${state.manifest.security.authBootstrapMode}`);
     console.log(`Gateway: ${running ? "running" : "stopped"}`);
+    console.log(`Workspace skills: ${workspaceSkills.readyCount}/${workspaceSkills.configuredCount} ready`);
     console.log(`Docker MCP profile: ${context.dockerMcpProfile}`);
     console.log(`Docker MCP: ${payload.mcp.available ? (codexTargetsRepoConfig(payload.mcp) ? "active" : "ready but inactive") : "unavailable"}`);
     if (payload.mcp.available) {
       console.log(`Docker MCP secrets: ${payload.mcp.secretStatus.syncedConfiguredCount}/${payload.mcp.secretStatus.configuredCount} configured secrets synced`);
+    }
+    if (!workspaceSkills.ok) {
+      for (const failure of workspaceSkills.failures) {
+        console.log(`Workspace skill warning: ${failure}`);
+      }
     }
     if (legacyContainers.length > 0) {
       console.log(`Legacy compose project detected: ${context.legacyComposeProjectName}`);
@@ -1910,6 +1966,7 @@ function pushCheck(results, key, ok, detail, recovery = "", level = "error") {
 async function handleDoctor(context, options) {
   let state = await prepareState(context, options);
   const results = [];
+  const workspaceSkills = await readWorkspaceSkillHealth(context, state.plugin);
 
   const dockerVersion = await safeRunCommand("docker", ["--version"]);
   pushCheck(
@@ -2003,6 +2060,16 @@ async function handleDoctor(context, options) {
     manifestErrors.length === 0,
     manifestErrors.length === 0 ? "Manifest rendered successfully." : manifestErrors.join("; "),
     manifestErrors.length === 0 ? "" : "Run `openclaw-repo-agent config validate` and fix the reported fields."
+  );
+
+  pushCheck(
+    results,
+    "workspace-skills",
+    workspaceSkills.ok,
+    workspaceSkills.ok
+      ? `Mandatory workspace skills are ready (${workspaceSkills.readyCount}/${workspaceSkills.configuredCount}).`
+      : workspaceSkills.failures.join("; "),
+    workspaceSkills.ok ? "" : "Run `openclaw-repo-agent up` or `openclaw-repo-agent update` to retry the mandatory workspace skill sync."
   );
 
   if (!state.useLocalBuild) {
@@ -2143,6 +2210,7 @@ async function handleUpdate(context, options) {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   });
+  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, state.plugin);
   const runtimeReady = await ensureRuntimeImageReady(context, state, options);
   state = runtimeReady.state;
   if (runtimeReady.autoSwitchedToLocalBuild) {
@@ -2161,6 +2229,11 @@ async function handleUpdate(context, options) {
     const args = ["up", "-d"];
     if (state.useLocalBuild) args.push("--build");
     await dockerCompose(context, args);
+  }
+  if (!workspaceSkills.ok) {
+    for (const failure of workspaceSkills.failures) {
+      console.log(`Warning: workspace skill not ready: ${failure}`);
+    }
   }
   await handleDoctor(context, { ...options, verify: false });
 }

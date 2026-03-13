@@ -6,7 +6,14 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { deriveComposeProjectName, selectLatestPendingPairingRequest } from "../cli/src/cli.mjs";
+import {
+  ACP_AGENT_CHOICES,
+  CODEX_AUTH_SOURCE_CHOICES,
+  defaultCodexAuthSource,
+  deriveComposeProjectName,
+  promptChoice,
+  selectLatestPendingPairingRequest
+} from "../cli/src/cli.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(".");
@@ -33,12 +40,66 @@ test("subcommand help prints usage instead of failing", async () => {
   assert.match(stdout, /Usage:/);
 });
 
+test("interactive init prompt strings no longer include repo settings or Telegram policy prompts", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.doesNotMatch(source, /Detected repo settings:/);
+  assert.doesNotMatch(source, /Override detected repo settings now \[no\]:/);
+  assert.doesNotMatch(source, /Telegram DM policy \[/);
+  assert.doesNotMatch(source, /Telegram group policy \[/);
+});
+
 test("version flag prints product version", async () => {
   const { stdout } = await execFileAsync(process.execPath, [cliPath, "--version"], {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.2.0");
+  assert.equal(stdout.trim(), "0.3.0");
+});
+
+test("ACP init choices include the supported built-in agents", () => {
+  assert.deepEqual(
+    ACP_AGENT_CHOICES.map((choice) => choice.value),
+    ["codex", "claude", "gemini", "opencode", "pi"]
+  );
+});
+
+test("Codex auth-source choices remain folder-first with API key fallback", () => {
+  assert.deepEqual(
+    CODEX_AUTH_SOURCE_CHOICES.map((choice) => choice.value),
+    ["auth-folder", "api-key"]
+  );
+});
+
+test("defaultCodexAuthSource prefers detected auth folders over API keys", () => {
+  assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, "C:/Users/demo/.codex"), "auth-folder");
+  assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, ""), "api-key");
+  assert.equal(defaultCodexAuthSource({}, {}, ""), "auth-folder");
+});
+
+test("promptChoice accepts default and numeric input", async () => {
+  const answers = ["", "2"];
+  const prompts = [];
+  const rl = {
+    async question(prompt) {
+      prompts.push(prompt);
+      return answers.shift() ?? "";
+    }
+  };
+  const writes = [];
+  const originalLog = console.log;
+  console.log = (...values) => writes.push(values.join(" "));
+  try {
+    const first = await promptChoice(rl, "ACP default agent", ACP_AGENT_CHOICES, "codex");
+    const second = await promptChoice(rl, "Codex auth source", CODEX_AUTH_SOURCE_CHOICES, "auth-folder");
+
+    assert.equal(first, "codex");
+    assert.equal(second, "api-key");
+    assert.ok(prompts.length >= 2);
+    assert.ok(writes.some((line) => line.includes("ACP default agent:")));
+  } finally {
+    console.log = originalLog;
+  }
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -55,7 +116,7 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.2.0");
+  assert.equal(payload.productVersion, "0.3.0");
 });
 
 test("deriveComposeProjectName uses the repo identity and prefix", () => {
@@ -95,7 +156,7 @@ test("instances list reads the machine-local registry", async () => {
         gatewayPort: "20001",
         portManaged: true,
         telegramTokenHash: "",
-        localRuntimeImage: "openclaw-repo-agent-runtime:0.2.0-repo-one-deadbeef",
+        localRuntimeImage: "openclaw-repo-agent-runtime:0.3.0-repo-one-deadbeef",
         dockerMcpProfile: "openclaw-repo-one-deadbeef",
         lastSeenAt: "2026-03-12T00:00:00.000Z"
       }

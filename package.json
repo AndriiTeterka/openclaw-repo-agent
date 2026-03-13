@@ -1,6 +1,6 @@
 {
   "name": "openclaw-repo-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "npm-first packaging for reusable OpenClaw, Telegram, and ACP repo agent flows.",
@@ -37,6 +37,9 @@
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "clawhub": "^0.7.0"
+  },
   "scripts": {
     "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",
     "test:unit": "node --test",

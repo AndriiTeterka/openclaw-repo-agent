@@ -1,9 +1,15 @@
+import { DEFAULT_REQUIRED_WORKSPACE_SKILLS, DEFAULT_WORKSPACE_SKILLS_DIRECTORY } from "./workspace-skills.mjs";
+
 export const PRODUCT_NAME = "openclaw-repo-agent";
-export const PRODUCT_VERSION = "0.2.0";
+export const PRODUCT_VERSION = "0.3.0";
 export const DEFAULT_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/andriiteterka/openclaw-repo-agent-runtime";
 export const DEFAULT_OPENCLAW_IMAGE = "ghcr.io/openclaw/openclaw:latest";
 export const DEFAULT_NPM_PACKAGE_NAME = PRODUCT_NAME;
 export const DEFAULT_CODEX_MODEL = "openai-codex/gpt-5.4";
+export const DEFAULT_WORKSPACE_SKILLS = {
+  directory: DEFAULT_WORKSPACE_SKILLS_DIRECTORY,
+  required: DEFAULT_REQUIRED_WORKSPACE_SKILLS
+};
 
 const STABLE_TELEGRAM_DEFAULTS = {
   dmPolicy: "pairing",
@@ -69,6 +75,9 @@ function baseProfile(overrides = {}) {
     instructionFiles: [".openclaw/instructions.md"],
     knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: [],
+    skills: {
+      ...DEFAULT_WORKSPACE_SKILLS
+    },
     agent: { ...STABLE_AGENT_DEFAULTS },
     telegram: { ...STABLE_TELEGRAM_DEFAULTS },
     acp: { ...STABLE_ACP_DEFAULTS },

@@ -51,17 +51,20 @@ If the default prebuilt runtime image is unavailable, `up` automatically falls b
 `init` auto-detects repo-derived settings first, including project name, tooling profile, instruction files, knowledge files, and verification commands. The interactive flow mainly asks for user-specific inputs such as:
 
 - ACP default agent
-- auth mode
+- Codex auth source when the ACP default agent is `codex`
 - Telegram bot token when it is not already configured
-- Telegram DM and group policy
-- Telegram allowlists only when the chosen policy needs them
 
-You can still override the detected repo settings interactively or later in `.openclaw/plugin.json`.
+Telegram defaults remain repo-local and silent during bootstrap:
+
+- Telegram DM policy: `pairing`
+- Telegram group policy: `disabled`
+
+You can still override detected repo settings and Telegram policy later in `.openclaw/plugin.json`, `.openclaw/local.env`, or with CLI flags.
 
 The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
 
 - repo config files: `.openclaw/plugin.json`, `.openclaw/instructions.md`, `.openclaw/knowledge.md`, `.openclaw/local.env.example`
-- local runtime files: `.openclaw/local.env`, `.openclaw/state/`
+- local runtime files: `.openclaw/local.env`, `.openclaw/state/`, `.openclaw/skills/`
 
 If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
 
@@ -112,10 +115,23 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 `codex` is the default ACP and bootstrap path now. The CLI prefers an existing Codex login under `CODEX_HOME` or `~/.codex`, and only falls back to prompting for an API key when no local Codex auth path is available.
 
+## Workspace Skills
+
+Every initialized workspace now gets a mandatory repo-local baseline skill pack under `.openclaw/skills`:
+
+- `Skill Vetter`
+- `Find Skills`
+- `pskoett/self-improving-agent`
+
+The repo agent attempts to sync these skills during `init`, `up`, and `update`. Skill sync is non-blocking, so the workspace can still initialize if ClawHub is unavailable, but `status` and `doctor` will report the workspace as incomplete until the mandatory skills are ready.
+
+The rendered OpenClaw config loads `.openclaw/skills` automatically. Use `Find Skills` to discover additional workspace skills later, and use `Skill Vetter` before adding any non-baseline skill.
+
 ## Local Configuration Notes
 
 - `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
 - `.openclaw/local.env` is the user-editable local override file; `.openclaw/state/runtime.env` is generated and should not be edited directly.
+- `.openclaw/skills` is the repo-local skill directory loaded into the containerized OpenClaw workspace.
 - `.openclaw/local.env` now stores `OPENCLAW_INSTANCE_ID` and `OPENCLAW_PORT_MANAGED` so repo instances can be tracked and reallocated safely.
 - `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` still live in `.openclaw/local.env` for the OpenClaw runtime, but `init`/`up` mirror them into Docker MCP secrets automatically.
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
@@ -127,6 +143,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
+- Workspace skill sync state is tracked in `.openclaw/state/skills-status.json`.
 - The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
 - Separate Telegram bot tokens are the supported concurrent multi-repo model. `up` now refuses to start two running repo instances with the same bot token.
 

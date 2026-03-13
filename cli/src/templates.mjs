@@ -1,7 +1,9 @@
 import { DEFAULT_OPENCLAW_IMAGE, DEFAULT_RUNTIME_IMAGE_REPOSITORY, PRODUCT_VERSION } from "./builtin-profiles.mjs";
 import { LEGACY_COMPOSE_PORT } from "./instance-registry.mjs";
+import { DEFAULT_REQUIRED_WORKSPACE_SKILLS, DEFAULT_WORKSPACE_SKILLS_DIRECTORY } from "./workspace-skills.mjs";
 
 export function defaultInstructionsTemplate(projectName) {
+  const baselineSkills = DEFAULT_REQUIRED_WORKSPACE_SKILLS.map((skill) => skill.name).join(", ");
   return `# Repo Agent Instructions
 
 - This workspace is managed by \`openclaw-repo-agent\`.
@@ -9,6 +11,8 @@ export function defaultInstructionsTemplate(projectName) {
 - Keep replies concise in Telegram-style channels and use the configured verification commands after relevant code changes.
 - Treat standalone cancellation messages such as \`stop\`, \`cancel\`, or \`dont fix\` as cancellation at the next tool boundary.
 - \`.openclaw/\` is git-ignored by default; do not commit local-only OpenClaw state or secrets unless you intentionally unignore selected files.
+- Baseline workspace skills are installed under \`${DEFAULT_WORKSPACE_SKILLS_DIRECTORY}\`: ${baselineSkills}.
+- Use \`Find Skills\` to discover additional workspace skills and use \`Skill Vetter\` before adding any non-baseline skill.
 - Project name: ${projectName}
 `;
 }
@@ -19,6 +23,7 @@ export function defaultKnowledgeTemplate(projectName) {
 - Project: ${projectName}
 - This file is injected into OpenClaw runs as project knowledge.
 - Record stable repo facts here: build/test commands, important architecture notes, and operator constraints.
+- Baseline skills live under \`${DEFAULT_WORKSPACE_SKILLS_DIRECTORY}\`.
 - Keep secrets and machine-specific values out of this file.
 `;
 }
@@ -143,6 +148,7 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
     OPENCLAW_AUTH_MOUNT: /agent-auth
     OPENCLAW_WORKSPACE: /workspace
     OPENCLAW_REPO_ROOT: /workspace
+    OPENCLAW_WORKSPACE_SKILLS_DIR: \${OPENCLAW_WORKSPACE_SKILLS_DIR}
     OPENCLAW_PROJECT_MANIFEST: /config/project-manifest.json
     OPENCLAW_RENDER_STATUS_PATH: /home/node/.openclaw/runtime/render-status.json
     OPENCLAW_HOST_PLATFORM: \${OPENCLAW_HOST_PLATFORM}

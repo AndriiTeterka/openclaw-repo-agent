@@ -76,3 +76,12 @@ test("buildOpenClawConfig preserves the codex provider model format", () => {
 
   assert.equal(config.agents.defaults.model.primary, "openai-codex/gpt-5.4");
 });
+
+test("buildOpenClawConfig loads repo-local workspace skills from .openclaw/skills", () => {
+  const manifest = createManifest();
+  const { config } = buildOpenClawConfig(manifest, {
+    OPENCLAW_WORKSPACE_SKILLS_DIR: "/workspace/.openclaw/skills"
+  });
+
+  assert.deepEqual(config.skills.load.extraDirs, ["/workspace/.openclaw/skills"]);
+});

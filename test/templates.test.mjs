@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { defaultLocalEnvExample, renderComposeTemplate, renderDockerMcpConfigTemplate } from "../cli/src/templates.mjs";
+import {
+  defaultInstructionsTemplate,
+  defaultKnowledgeTemplate,
+  defaultLocalEnvExample,
+  renderComposeTemplate,
+  renderDockerMcpConfigTemplate
+} from "../cli/src/templates.mjs";
 
 test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", () => {
   const output = renderDockerMcpConfigTemplate("C:/Users/demo/workspace/repo");
@@ -30,4 +36,14 @@ test("renderComposeTemplate uses labels instead of a custom container name", () 
   assert.doesNotMatch(output, /container_name:/);
   assert.match(output, /openclaw\.instance-id: \$\{OPENCLAW_INSTANCE_ID\}/);
   assert.match(output, /openclaw\.compose-project: \$\{OPENCLAW_COMPOSE_PROJECT_NAME\}/);
+  assert.match(output, /OPENCLAW_WORKSPACE_SKILLS_DIR: \$\{OPENCLAW_WORKSPACE_SKILLS_DIR\}/);
+});
+
+test("default templates mention the mandatory workspace skill flow", () => {
+  const instructions = defaultInstructionsTemplate("Demo");
+  const knowledge = defaultKnowledgeTemplate("Demo");
+
+  assert.match(instructions, /Baseline workspace skills are installed under `.openclaw\/skills`/);
+  assert.match(instructions, /Use `Find Skills` to discover additional workspace skills/);
+  assert.match(knowledge, /Baseline skills live under `.openclaw\/skills`/);
 });

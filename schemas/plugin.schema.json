@@ -90,6 +90,31 @@
         "type": "string"
       }
     },
+    "skills": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "agent": {
       "type": "object"
     },
