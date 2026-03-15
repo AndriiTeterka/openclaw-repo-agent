@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import {
   ACP_AGENT_CHOICES,
+  collectInitPromptState,
   CODEX_AUTH_SOURCE_CHOICES,
   defaultCodexAuthSource,
   deriveComposeProjectName,
@@ -19,6 +20,58 @@ import {
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(".");
 const cliPath = path.resolve("cli/bin/openclaw-repo-agent.mjs");
+
+function createPromptTestContext(tempRoot = repoRoot) {
+  return {
+    repoRoot: tempRoot,
+    detection: {
+      projectName: "demo-workspace",
+      toolingProfile: "none",
+      instructionCandidates: [],
+      knowledgeCandidates: [],
+      verificationCommands: []
+    }
+  };
+}
+
+function createPromptTestPlugin() {
+  return {
+    version: 1,
+    profile: "custom",
+    projectName: "demo-workspace",
+    deploymentProfile: "docker-local",
+    toolingProfile: "none",
+    runtimeProfile: "stable-chat",
+    queueProfile: "stable-chat",
+    instructionFiles: [".openclaw/instructions.md"],
+    knowledgeFiles: [".openclaw/knowledge.md"],
+    verificationCommands: [],
+    skills: {
+      directory: ".openclaw/skills",
+      required: []
+    },
+    agent: {
+      id: "workspace",
+      name: "Demo Workspace"
+    },
+    telegram: {
+      dmPolicy: "pairing",
+      groupPolicy: "disabled",
+      streamMode: "partial",
+      replyToMode: "first",
+      network: {
+        autoSelectFamily: true
+      }
+    },
+    acp: {
+      defaultAgent: "codex",
+      allowedAgents: ["codex"]
+    },
+    security: {
+      authBootstrapMode: "codex"
+    }
+  };
+}
 
 test("global help prints usage", async () => {
   const { stdout, stderr } = await execFileAsync(process.execPath, [cliPath, "--help"], {
@@ -50,21 +103,22 @@ test("interactive init prompt strings no longer include repo settings or Telegra
   assert.doesNotMatch(source, /Telegram group policy \[/);
 });
 
-test("update keeps printing the OpenClaw overview after doctor runs", async () => {
+test("update no longer prints raw OpenClaw overview after doctor runs", async () => {
   const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
 
-  assert.match(source, /await handleDoctor\(context, \{ \.\.\.options, verify: false \}\);[\s\S]*await printOpenClawOverview\(context\);/);
+  assert.match(source, /await handleDoctor\(context, \{ \.\.\.options, verify: false \}\);/);
+  assert.doesNotMatch(source, /printOpenClawOverview/);
 });
 
-test("major command handlers print overview tables", async () => {
+test("major command handlers use the shared report renderer", async () => {
   const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
 
-  assert.match(source, /printOverviewTable\("Init Summary"/);
-  assert.match(source, /printOverviewTable\("Up Summary"/);
-  assert.match(source, /printOverviewTable\("Pair Summary"/);
-  assert.match(source, /printOverviewTable\("Status Summary"/);
-  assert.match(source, /printOverviewTable\("Doctor Summary"/);
-  assert.match(source, /printOverviewTable\("Update Summary"/);
+  assert.match(source, /printCommandReport\("success", "Init complete"/);
+  assert.match(source, /printCommandReport\("success", "Up complete"/);
+  assert.match(source, /printCommandReport\(pairResult\.approved \? "success" : "warning", "Pairing complete"/);
+  assert.match(source, /printCommandReport\("success", "Status"/);
+  assert.match(source, /printCommandReport\(ok \? "success" : "warning", "Doctor"/);
+  assert.match(source, /printCommandReport\("success", "Update complete"/);
 });
 
 test("version flag prints product version", async () => {
@@ -72,13 +126,13 @@ test("version flag prints product version", async () => {
     cwd: repoRoot
   });
 
-  assert.equal(stdout.trim(), "0.3.1");
+  assert.equal(stdout.trim(), "0.4.0");
 });
 
 test("ACP init choices include the supported built-in agents", () => {
   assert.deepEqual(
     ACP_AGENT_CHOICES.map((choice) => choice.value),
-    ["codex", "claude", "gemini", "opencode", "pi"]
+    ["codex", "claude", "gemini"]
   );
 });
 
@@ -120,6 +174,62 @@ test("promptChoice accepts default and numeric input", async () => {
   }
 });
 
+test("collectInitPromptState asks Telegram after Codex auth prompts", async () => {
+  const prompts = [];
+  const answers = ["", "", "123:telegram-token"];
+  const rl = {
+    async question(prompt) {
+      prompts.push(prompt);
+      return answers.shift() ?? "";
+    }
+  };
+
+  await collectInitPromptState(
+    rl,
+    createPromptTestContext(),
+    createPromptTestPlugin(),
+    {},
+    {},
+    "C:/Users/demo/.codex"
+  );
+
+  assert.deepEqual(prompts, [
+    "Choose acp default agent [1]: ",
+    "Choose codex auth source [1]: ",
+    "Telegram bot token [replace-with-your-botfather-token]: "
+  ]);
+});
+
+test("collectInitPromptState asks Telegram after ACP selection for non-codex agents", async () => {
+  const prompts = [];
+  const answers = ["2", "123:telegram-token"];
+  const rl = {
+    async question(prompt) {
+      prompts.push(prompt);
+      return answers.shift() ?? "";
+    }
+  };
+
+  const plugin = createPromptTestPlugin();
+  plugin.acp.defaultAgent = "claude";
+  plugin.acp.allowedAgents = ["claude"];
+  plugin.security.authBootstrapMode = "external";
+
+  await collectInitPromptState(
+    rl,
+    createPromptTestContext(),
+    plugin,
+    {},
+    {},
+    ""
+  );
+
+  assert.deepEqual(prompts, [
+    "Choose acp default agent [2]: ",
+    "Telegram bot token [replace-with-your-botfather-token]: "
+  ]);
+});
+
 test("inline option syntax works for config validation", async () => {
   const { stdout } = await execFileAsync(process.execPath, [
     cliPath,
@@ -134,7 +244,77 @@ test("inline option syntax works for config validation", async () => {
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.productVersion, "0.3.1");
+  assert.equal(payload.productVersion, "0.4.0");
+});
+
+test("config validation rejects unsupported ACP agents from plugin config", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bad-acp-config-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify({
+    ...createPromptTestPlugin(),
+    acp: {
+      defaultAgent: "opencode",
+      allowedAgents: ["opencode"]
+    }
+  }, null, 2));
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, "config", "validate", "--repo-root", repoPath, "--product-root=."], {
+      cwd: repoRoot
+    }),
+    (error) => {
+      assert.match(error.stderr, /Unsupported acp\.defaultAgent: opencode/i);
+      return true;
+    }
+  );
+});
+
+test("config validation rejects unsupported ACP agents from local env overrides", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bad-acp-env-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
+  await fs.writeFile(path.join(openclawPath, "local.env"), "OPENCLAW_ACP_DEFAULT_AGENT=opencode\n");
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, "config", "validate", "--repo-root", repoPath, "--product-root=."], {
+      cwd: repoRoot
+    }),
+    (error) => {
+      assert.match(error.stderr, /Unsupported OPENCLAW_ACP_DEFAULT_AGENT: opencode/i);
+      return true;
+    }
+  );
+});
+
+test("config validation rejects unsupported ACP agents from CLI flags", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bad-acp-flag-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      cliPath,
+      "config",
+      "validate",
+      "--repo-root",
+      repoPath,
+      "--product-root=.",
+      "--acp-default-agent",
+      "opencode"
+    ], {
+      cwd: repoRoot
+    }),
+    (error) => {
+      assert.match(error.stderr, /Unsupported --acp-default-agent: opencode/i);
+      return true;
+    }
+  );
 });
 
 test("deriveComposeProjectName uses the repo identity and prefix", () => {
@@ -180,7 +360,7 @@ test("instances list reads the machine-local registry", async () => {
         gatewayPort: "20001",
         portManaged: true,
         telegramTokenHash: "",
-        localRuntimeImage: "openclaw-repo-agent-runtime:0.3.1-repo-one-deadbeef",
+        localRuntimeImage: "openclaw-repo-agent-runtime:0.4.0-repo-one-deadbeef",
         dockerMcpProfile: "openclaw-repo-one-deadbeef",
         lastSeenAt: "2026-03-12T00:00:00.000Z"
       }

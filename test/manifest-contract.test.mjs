@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildOpenClawConfig, normalizeProjectManifest } from "../runtime/manifest-contract.mjs";
+import { buildOpenClawConfig, normalizeProjectManifest, validateProjectManifest } from "../runtime/manifest-contract.mjs";
 
 function createManifest(overrides = {}) {
   return normalizeProjectManifest({
@@ -25,7 +25,7 @@ function createManifest(overrides = {}) {
       replyToMode: "first"
     },
     acp: {
-      defaultAgent: "assistant",
+      defaultAgent: "codex",
       allowedAgents: [],
       preferredMode: "oneshot"
     },
@@ -42,7 +42,7 @@ test("normalizeProjectManifest folds bootstrap files and ACP agents into stable 
     knowledgeFiles: [".openclaw/knowledge.md", "docs/project-knowledge.md"]
   });
 
-  assert.deepEqual(manifest.acp.allowedAgents, ["assistant"]);
+  assert.deepEqual(manifest.acp.allowedAgents, ["codex"]);
   assert.deepEqual(manifest.instructionFiles, [
     "README.md",
     ".openclaw/knowledge.md",
@@ -75,6 +75,20 @@ test("buildOpenClawConfig preserves the codex provider model format", () => {
   const { config } = buildOpenClawConfig(manifest);
 
   assert.equal(config.agents.defaults.model.primary, "openai-codex/gpt-5.4");
+});
+
+test("validateProjectManifest rejects unsupported ACP agents", () => {
+  const manifest = createManifest({
+    acp: {
+      defaultAgent: "opencode",
+      allowedAgents: ["opencode"],
+      preferredMode: "oneshot"
+    }
+  });
+
+  const errors = validateProjectManifest(manifest);
+  assert.match(errors.join("; "), /acp\.defaultAgent must be one of codex, claude, gemini/);
+  assert.match(errors.join("; "), /acp\.allowedAgents must contain only supported agents: codex, claude, gemini/);
 });
 
 test("buildOpenClawConfig loads repo-local workspace skills from .openclaw/skills", () => {

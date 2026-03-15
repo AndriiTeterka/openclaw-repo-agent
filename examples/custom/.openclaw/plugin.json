@@ -25,7 +25,7 @@
     "replyToMode": "first"
   },
   "acp": {
-    "defaultAgent": "assistant"
+    "defaultAgent": "codex"
   },
   "security": {
     "authBootstrapMode": "external"

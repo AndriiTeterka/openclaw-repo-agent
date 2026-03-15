@@ -122,7 +122,28 @@
       "type": "object"
     },
     "acp": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "defaultAgent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini"
+          ]
+        },
+        "allowedAgents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "gemini"
+            ]
+          }
+        }
+      }
     },
     "security": {
       "type": "object"

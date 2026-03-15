@@ -113,6 +113,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - Queue profile: `stable-chat`
 - ACP backend: `acpx`
 - ACP default agent: `codex`
+- Supported ACP agents: `codex`, `claude`, `gemini`
 - Telegram DM policy: `pairing`
 - Telegram group policy: `disabled`
 - Auth bootstrap mode: `codex`
@@ -216,6 +217,12 @@ Run unit tests, validate the example, and inspect the published tarball contents
 npm test
 ```
 
+Run the same publish gate explicitly without going through `npm publish`:
+
+```bash
+npm run release:check
+```
+
 Validate a consumer repo manually:
 
 ```bash
@@ -235,6 +242,14 @@ node ./cli/bin/openclaw-repo-agent.mjs init --repo-root /path/to/repo --product-
 - release tags: `vX.Y.Z`
 
 npm publishing is configured for GitHub Actions trusted publishing via [`.github/workflows/release.yml`](.github/workflows/release.yml). Before the first release, configure the npm package to trust this repository/workflow on npm. No `NPM_TOKEN` repository secret is needed for package publishing.
+
+Release flow:
+
+1. update `package.json` and `cli/src/builtin-profiles.mjs` to the target version
+2. run `npm run release:check`
+3. push a matching Git tag such as `v0.4.0`
+
+The release workflow rejects tags that do not match `package.json`, and `npm publish` is guarded by the repo's `prepublishOnly` release checks.
 
 The GitHub Actions workflows in [`.github/workflows`](.github/workflows) are already repo-root ready.
 

@@ -268,12 +268,22 @@
       ],
       "properties": {
         "defaultAgent": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini"
+          ]
         },
         "allowedAgents": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "gemini"
+            ]
           },
           "minItems": 1
         },

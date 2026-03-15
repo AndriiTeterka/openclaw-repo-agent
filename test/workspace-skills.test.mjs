@@ -11,6 +11,7 @@ import {
   normalizeWorkspaceSkillsConfig,
   parseSkillsFindResults,
   readWorkspaceSkillsStatus,
+  summarizeWorkspaceSkillCommandError,
   summarizeWorkspaceSkillsStatus,
   syncWorkspaceSkills
 } from "../cli/src/workspace-skills.mjs";
@@ -99,6 +100,28 @@ Install with npx skills add <owner/repo@skill>
       query: ""
     }
   ]);
+});
+
+test("summarizeWorkspaceSkillCommandError normalizes noisy third-party failures", () => {
+  const authError = summarizeWorkspaceSkillCommandError(`
+███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
+Authentication failed for https://github.com/spclaudehome/skill-vetter.git.
+Failed to clone repository
+`, {
+    action: "install",
+    skillLabel: "Skill Vetter"
+  });
+  const missingSlug = summarizeWorkspaceSkillCommandError(`
+No matching skills found for: self-improving-agent
+Available skills:
+- self-improvement
+`, {
+    action: "install",
+    skillLabel: "Self-Improving Agent"
+  });
+
+  assert.equal(authError, "repository authentication/access failed");
+  assert.equal(missingSlug, "skill slug not found in source repository");
 });
 
 test("detectWorkspaceSkillQueries finds repo-specific skill queries from nested project markers", async () => {

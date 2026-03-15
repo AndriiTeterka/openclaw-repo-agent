@@ -14,8 +14,8 @@ import { deriveLocalRuntimeImage } from "../cli/src/instance-registry.mjs";
 test("shouldAutoUseLocalBuild falls back for denied access to the default image", () => {
   assert.equal(shouldAutoUseLocalBuild({
     useLocalBuild: false,
-    stackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.3.1-polyglot",
-    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.3.1-polyglot",
+    stackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.4.0-polyglot",
+    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.4.0-polyglot",
     errorOutput: "error from registry: denied"
   }), true);
 });
@@ -24,7 +24,7 @@ test("shouldAutoUseLocalBuild does not override a custom image reference", () =>
   assert.equal(shouldAutoUseLocalBuild({
     useLocalBuild: false,
     stackImage: "ghcr.io/private/custom-runtime:1.2.3",
-    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.3.1-polyglot",
+    defaultStackImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.4.0-polyglot",
     errorOutput: "error from registry: denied"
   }), false);
 });
@@ -32,8 +32,8 @@ test("shouldAutoUseLocalBuild does not override a custom image reference", () =>
 test("buildLocalRuntimeEnvOverrides enables local build and rewrites the default stack image", () => {
   const localRuntimeImage = deriveLocalRuntimeImage("appium-test-project-deadbeef");
   const nextEnv = buildLocalRuntimeEnvOverrides({
-    OPENCLAW_STACK_IMAGE: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.3.1-polyglot"
-  }, "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.3.1-polyglot", localRuntimeImage, "appium-test-project-deadbeef");
+    OPENCLAW_STACK_IMAGE: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.4.0-polyglot"
+  }, "ghcr.io/andriiteterka/openclaw-repo-agent-runtime:0.4.0-polyglot", localRuntimeImage, "appium-test-project-deadbeef");
 
   assert.equal(nextEnv.OPENCLAW_USE_LOCAL_BUILD, "true");
   assert.equal(nextEnv.OPENCLAW_STACK_IMAGE, localRuntimeImage);

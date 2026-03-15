@@ -2,6 +2,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { deepMerge, parseStringArrayEnv, resolveBoolean, resolveInteger } from "./shared.mjs";
+import {
+  formatSupportedAcpAgents,
+  isSupportedAcpAgent,
+  normalizeAcpAgentValue
+} from "./supported-acp-agents.mjs";
 export const SUPPORTED_DEPLOYMENT_PROFILES = ["docker-local", "wsl2", "linux-vps", "native-dev"];
 export const SUPPORTED_TOOLING_PROFILES = ["none", "java17", "node20", "python311", "go122", "polyglot"];
 export const SUPPORTED_RUNTIME_PROFILES = ["stable-chat", "interactive-steer", "topic-bound-acp", "ci-runner"];
@@ -222,8 +227,8 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   const tools = deepMerge(runtimePreset.tools, isObject(rawManifest.tools) ? rawManifest.tools : {});
 
   const allowedAgents = uniqueStrings([
-    ...toStringArray(acp.allowedAgents, []),
-    ...toStringArray(acp.defaultAgent ? [acp.defaultAgent] : [], []),
+    ...toStringArray(acp.allowedAgents, []).map((value) => normalizeAcpAgentValue(value)),
+    ...toStringArray(acp.defaultAgent ? [acp.defaultAgent] : [], []).map((value) => normalizeAcpAgentValue(value)),
   ]);
 
   telegram.allowFrom = normalizePrincipalArray(telegram.allowFrom);
@@ -265,7 +270,7 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
     timeoutSec: resolveInteger(tools.exec?.timeoutSec, 600),
   };
 
-  acp.defaultAgent = nonEmptyString(acp.defaultAgent, "");
+  acp.defaultAgent = normalizeAcpAgentValue(nonEmptyString(acp.defaultAgent, ""));
   acp.allowedAgents = allowedAgents;
   acp.preferredMode = nonEmptyString(acp.preferredMode, "oneshot");
   acp.maxConcurrentSessions = resolveInteger(acp.maxConcurrentSessions, 4);
@@ -328,7 +333,13 @@ export function validateProjectManifest(manifest) {
   pushError(errors, ["first", "latest"].includes(manifest.telegram?.replyToMode), "telegram.replyToMode must be first or latest");
   pushError(errors, ["minimal", "off", "full"].includes(nonEmptyString(manifest.telegram?.reactionLevel, "minimal")), "telegram.reactionLevel must be minimal, off, or full");
   pushError(errors, Boolean(manifest.acp?.defaultAgent), "acp.defaultAgent is required");
+  pushError(errors, isSupportedAcpAgent(manifest.acp?.defaultAgent), `acp.defaultAgent must be one of ${formatSupportedAcpAgents()}`);
   pushError(errors, Array.isArray(manifest.acp?.allowedAgents) && manifest.acp.allowedAgents.length > 0, "acp.allowedAgents must contain at least one agent");
+  pushError(
+    errors,
+    Array.isArray(manifest.acp?.allowedAgents) && manifest.acp.allowedAgents.every((agent) => isSupportedAcpAgent(agent)),
+    `acp.allowedAgents must contain only supported agents: ${formatSupportedAcpAgents()}`
+  );
   pushError(errors, Number.isInteger(manifest.acp?.maxConcurrentSessions) && manifest.acp.maxConcurrentSessions > 0, "acp.maxConcurrentSessions must be > 0");
   pushError(errors, Number.isInteger(manifest.tools?.exec?.timeoutSec) && manifest.tools.exec.timeoutSec > 0, "tools.exec.timeoutSec must be > 0");
   pushError(errors, ["codex", "external", "none"].includes(normalizeAuthMode(manifest.security?.authBootstrapMode)), "security.authBootstrapMode must be codex, external, or none");

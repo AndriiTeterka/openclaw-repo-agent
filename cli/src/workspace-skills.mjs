@@ -92,6 +92,48 @@ function stripAnsi(value) {
   return String(value ?? "").replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
+function extractMeaningfulSkillErrorLine(value) {
+  const lines = stripAnsi(value)
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^[\s\W_]+$/.test(line))
+    .filter((line) => !/^(tip:|source:|available skills:|[┌┐└┘│◇◒◓◐■●])\b/i.test(line))
+    .filter((line) => !/^[█═╔╗╚╝║]+/.test(line));
+  return lines.find((line) => /[A-Za-z0-9]/.test(line)) || "";
+}
+
+export function summarizeWorkspaceSkillCommandError(rawError, options = {}) {
+  const action = String(options.action ?? "install").trim() || "install";
+  const skillLabel = String(options.skillLabel ?? "workspace skill").trim() || "workspace skill";
+  const query = String(options.query ?? "").trim();
+  const normalized = stripAnsi(rawError).trim();
+
+  if (!normalized) {
+    return action === "search"
+      ? `Skill discovery failed for ${query || "the requested query"}.`
+      : `Failed to install ${skillLabel}.`;
+  }
+
+  if (/authentication failed|could not read username|repository not found|have access|access denied/i.test(normalized)) {
+    return "repository authentication/access failed";
+  }
+  if (/no matching skills found/i.test(normalized)) {
+    return "skill slug not found in source repository";
+  }
+  if (/timed out after/i.test(normalized)) {
+    return "command timed out";
+  }
+  if (/failed to clone repository/i.test(normalized)) {
+    return "repository clone failed";
+  }
+
+  return extractMeaningfulSkillErrorLine(normalized)
+    || (action === "search"
+      ? `Skill discovery failed for ${query || "the requested query"}.`
+      : `Failed to install ${skillLabel}.`);
+}
+
 function normalizeWorkspaceSkillsDirectory(value) {
   const normalized = String(value ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
   if (!normalized) return DEFAULT_WORKSPACE_SKILLS_DIRECTORY;
@@ -181,7 +223,12 @@ function normalizePersistedWorkspaceSkillsStatus(rawStatus = {}) {
   for (const entry of rawSkills) {
     const normalized = {
       ...normalizeWorkspaceSkillEntry(entry),
-      lastError: String(entry?.lastError ?? "").trim(),
+      lastError: String(entry?.lastError ?? "").trim()
+        ? summarizeWorkspaceSkillCommandError(String(entry?.lastError ?? "").trim(), {
+            action: "install",
+            skillLabel: entry?.name || entry?.slug || "workspace skill"
+          })
+        : "",
       lastAttemptAt: String(entry?.lastAttemptAt ?? "").trim() || ""
     };
     if (!normalized.slug) continue;
@@ -204,8 +251,13 @@ function normalizeDiscoveryErrors(rawErrors = []) {
   const normalized = [];
   for (const entry of Array.isArray(rawErrors) ? rawErrors : []) {
     const query = String(entry?.query ?? "").trim();
-    const error = String(entry?.error ?? entry?.message ?? "").trim();
-    if (!query || !error) continue;
+    const rawError = String(entry?.error ?? entry?.message ?? "").trim();
+    if (!query || !rawError) continue;
+    const error = summarizeWorkspaceSkillCommandError(rawError, {
+      action: "search",
+      query
+    });
+    if (!error) continue;
     if (normalized.some((item) => item.query === query && item.error === error)) continue;
     normalized.push({ query, error });
   }
@@ -537,7 +589,16 @@ async function runSkillsFindQuery(context, query) {
     timeoutMs: WORKSPACE_SKILLS_DISCOVERY_TIMEOUT_MS
   });
 
-  if (result.code !== 0) return { query, results: [], error: result.stderr.trim() || result.stdout.trim() || `Failed to search skills for ${query}.` };
+  if (result.code !== 0) {
+    return {
+      query,
+      results: [],
+      error: summarizeWorkspaceSkillCommandError(result.stderr.trim() || result.stdout.trim(), {
+        action: "search",
+        query
+      })
+    };
+  }
 
   return {
     query,
@@ -733,7 +794,10 @@ export async function syncWorkspaceSkills(context, rawSkillsConfig = {}, options
 
     const output = result.code === 0
       ? ""
-      : (result.stderr.trim() || result.stdout.trim() || `Failed to install ${skill.slug}.`);
+      : summarizeWorkspaceSkillCommandError(result.stderr.trim() || result.stdout.trim(), {
+          action: "install",
+          skillLabel: skill.name || skill.slug
+        });
 
     errorBySlug[skill.slug] = output;
     installResults.push({

@@ -1,6 +1,6 @@
 {
   "name": "openclaw-repo-agent",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "npm-first packaging for reusable OpenClaw, Telegram, and ACP repo agent flows.",
@@ -44,6 +44,8 @@
     "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",
     "test:unit": "node --test",
     "pack:dry-run": "npm pack --dry-run",
-    "test": "npm run test:unit && npm run check && npm run pack:dry-run"
+    "release:check": "npm run test:unit && npm run check && npm run pack:dry-run",
+    "test": "npm run release:check",
+    "prepublishOnly": "npm run release:check"
   }
 }
