@@ -11,6 +11,7 @@ import {
   CODEX_AUTH_SOURCE_CHOICES,
   defaultCodexAuthSource,
   deriveComposeProjectName,
+  hasGitignoreEntry,
   promptChoice,
   selectLatestPendingPairingRequest
 } from "../cli/src/cli.mjs";
@@ -47,6 +48,23 @@ test("interactive init prompt strings no longer include repo settings or Telegra
   assert.doesNotMatch(source, /Override detected repo settings now \[no\]:/);
   assert.doesNotMatch(source, /Telegram DM policy \[/);
   assert.doesNotMatch(source, /Telegram group policy \[/);
+});
+
+test("update keeps printing the OpenClaw overview after doctor runs", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.match(source, /await handleDoctor\(context, \{ \.\.\.options, verify: false \}\);[\s\S]*await printOpenClawOverview\(context\);/);
+});
+
+test("major command handlers print overview tables", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.match(source, /printOverviewTable\("Init Summary"/);
+  assert.match(source, /printOverviewTable\("Up Summary"/);
+  assert.match(source, /printOverviewTable\("Pair Summary"/);
+  assert.match(source, /printOverviewTable\("Status Summary"/);
+  assert.match(source, /printOverviewTable\("Doctor Summary"/);
+  assert.match(source, /printOverviewTable\("Update Summary"/);
 });
 
 test("version flag prints product version", async () => {
@@ -139,6 +157,12 @@ test("example consumer repo ignores the full .openclaw directory", async () => {
   const gitignore = await fs.readFile(path.join(repoRoot, "examples", "custom", ".gitignore"), "utf8");
 
   assert.match(gitignore, /^\.openclaw\/$/m);
+});
+
+test("hasGitignoreEntry only matches effective top-level .openclaw ignore rules", () => {
+  assert.equal(hasGitignoreEntry(".openclaw/\n", ".openclaw/"), true);
+  assert.equal(hasGitignoreEntry("/.openclaw\n", ".openclaw/"), true);
+  assert.equal(hasGitignoreEntry("# .openclaw/\n.openclaw/*.json\n", ".openclaw/"), false);
 });
 
 test("instances list reads the machine-local registry", async () => {
@@ -248,3 +272,4 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
   assert.equal(payload.manifest.agent.defaultModel, "openai-codex/gpt-5.4");
   assert.equal(payload.manifest.security.authBootstrapMode, "codex");
 });
+

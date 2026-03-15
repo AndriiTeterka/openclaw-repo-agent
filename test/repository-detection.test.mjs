@@ -51,3 +51,17 @@ name = "service-worker"
     assert.deepEqual(detection.verificationCommands, ["python -m pytest"]);
   });
 });
+
+test("detectRepository recognizes Gradle Kotlin DSL projects", async () => {
+  await withTempRepo(async (repoRoot) => {
+    await fs.writeFile(path.join(repoRoot, "settings.gradle.kts"), "rootProject.name = \"kts-service\"\n");
+    await fs.writeFile(path.join(repoRoot, "build.gradle.kts"), "plugins { java }\n");
+    await fs.writeFile(path.join(repoRoot, "gradlew"), "#!/bin/sh\n");
+  }, async (repoRoot) => {
+    const detection = await detectRepository(repoRoot);
+
+    assert.equal(detection.projectName, "kts-service");
+    assert.equal(detection.toolingProfile, "java17");
+    assert.deepEqual(detection.verificationCommands, ["./gradlew build"]);
+  });
+});

@@ -157,7 +157,7 @@ export async function copyFileIfNewer(sourcePath, targetPath) {
 }
 
 export async function runCommand(command, args, options = {}) {
-  const { cwd, env, input } = options;
+  const { cwd, env, input, timeoutMs } = options;
 
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -168,6 +168,9 @@ export async function runCommand(command, args, options = {}) {
 
     const stdout = [];
     const stderr = [];
+    let timedOut = false;
+    let timeoutId = null;
+    let forceKillId = null;
 
     child.stdout.on("data", (chunk) => {
       stdout.push(Buffer.from(chunk));
@@ -175,14 +178,41 @@ export async function runCommand(command, args, options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr.push(Buffer.from(chunk));
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (forceKillId) clearTimeout(forceKillId);
+      reject(error);
+    });
     child.on("close", (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (forceKillId) clearTimeout(forceKillId);
+      const stdoutText = Buffer.concat(stdout).toString("utf8");
+      const stderrText = Buffer.concat(stderr).toString("utf8");
+      const timeoutSuffix = timedOut
+        ? `${stderrText ? "\n" : ""}Command timed out after ${timeoutMs}ms.`
+        : "";
       resolve({
-        code: typeof code === "number" ? code : 1,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
+        code: timedOut ? 1 : (typeof code === "number" ? code : 1),
+        stdout: stdoutText,
+        stderr: `${stderrText}${timeoutSuffix}`,
       });
     });
+
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        try {
+          child.kill();
+        } catch {}
+        forceKillId = setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {}
+        }, 1000);
+        forceKillId.unref?.();
+      }, timeoutMs);
+      timeoutId.unref?.();
+    }
 
     if (input != null && input !== "") child.stdin.end(input);
     else child.stdin.end();

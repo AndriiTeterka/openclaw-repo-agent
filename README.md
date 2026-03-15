@@ -25,14 +25,19 @@ npx openclaw-repo-agent mcp use
 - OpenAI or Codex auth inputs only when `authBootstrapMode` is set to `codex`
 - Optional: a GitHub personal access token if you want authenticated `github-official` MCP tools
 
-## What It Ships
+## Package Contents
 
 - An interactive repo bootstrap CLI
 - A reusable OpenClaw runtime image source under [`runtime/`](runtime/)
 - JSON schemas for repo config and rendered manifests under [`schemas/`](schemas/)
+
+## Repository Extras
+
+These assets are included in the source repository, but they are not part of the published npm tarball:
+
 - A reusable plugin validation action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin)
 - A generic example consumer repo under [`examples/custom`](examples/custom)
-- Release automation for npm and GHCR
+- Release automation for npm and GHCR under [`.github/workflows`](.github/workflows)
 
 ## First-Time User Flow
 
@@ -123,9 +128,9 @@ Every initialized workspace now gets a mandatory repo-local baseline skill pack 
 - `Find Skills`
 - `pskoett/self-improving-agent`
 
-The repo agent attempts to sync these skills during `init`, `up`, and `update`. Skill sync is non-blocking, so the workspace can still initialize if ClawHub is unavailable, but `status` and `doctor` will report the workspace as incomplete until the mandatory skills are ready.
+The repo agent attempts to sync these skills during `init`, `up`, and `update`. It also uses `Find Skills`-style discovery to search for a few repo-specific skills based on the detected stack and records the top matches for review. Skill sync is non-blocking, so the workspace can still initialize if ClawHub or public skill discovery is unavailable, but `status` and `doctor` will report any missing mandatory skills, recommended repo-specific skills, or discovery errors.
 
-The rendered OpenClaw config loads `.openclaw/skills` automatically. Use `Find Skills` to discover additional workspace skills later, and use `Skill Vetter` before adding any non-baseline skill.
+The rendered OpenClaw config loads `.openclaw/skills` automatically. Repo-specific skills are suggested during sync instead of being auto-installed, and you can use `Find Skills` to discover more later. Use `Skill Vetter` before adding any non-baseline skill.
 
 ## Local Configuration Notes
 
@@ -137,6 +142,7 @@ The rendered OpenClaw config loads `.openclaw/skills` automatically. Use `Find S
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
 - Telegram stream mode is configured with `OPENCLAW_TELEGRAM_STREAM_MODE` in `.openclaw/local.env`.
 - `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains local because it is a host path, not a keychain secret.
+- `OPENCLAW_GATEWAY_BIND=lan` is intentional in the generated Docker setup so bridge traffic can reach the gateway inside the container; the generated Compose file still publishes the host port on `127.0.0.1` only unless you change the port mapping.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
 - Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.

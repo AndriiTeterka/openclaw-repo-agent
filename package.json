@@ -33,12 +33,12 @@
     "cli/**/*",
     "runtime/**/*",
     "schemas/**/*",
-    "profiles/**/*",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "clawhub": "^0.7.0"
+    "clawhub": "^0.7.0",
+    "skills": "^1.4.4"
   },
   "scripts": {
     "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",

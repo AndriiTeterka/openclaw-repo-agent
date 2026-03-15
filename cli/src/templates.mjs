@@ -12,7 +12,8 @@ export function defaultInstructionsTemplate(projectName) {
 - Treat standalone cancellation messages such as \`stop\`, \`cancel\`, or \`dont fix\` as cancellation at the next tool boundary.
 - \`.openclaw/\` is git-ignored by default; do not commit local-only OpenClaw state or secrets unless you intentionally unignore selected files.
 - Baseline workspace skills are installed under \`${DEFAULT_WORKSPACE_SKILLS_DIRECTORY}\`: ${baselineSkills}.
-- Use \`Find Skills\` to discover additional workspace skills and use \`Skill Vetter\` before adding any non-baseline skill.
+- Repo-specific workspace skills may be recommended based on the detected stack and reported in status/doctor output.
+- Use \`Find Skills\` to discover more workspace skills and use \`Skill Vetter\` before adding any non-baseline skill.
 - Project name: ${projectName}
 `;
 }
@@ -41,6 +42,8 @@ export function defaultLocalEnvExample(useLocalBuild = false, values = {}) {
 # .openclaw/ is git-ignored by default.
 # init/up will mirror configured API-style credentials into Docker MCP secrets automatically.
 # TARGET_AUTH_PATH stays here because it is a local host path, not a keychain secret.
+# OPENCLAW_GATEWAY_BIND stays "lan" in Docker bridge mode so the host port mapping can reach the gateway.
+# The generated compose file still publishes the host port on 127.0.0.1 only unless you change the ports stanza.
 
 OPENCLAW_STACK_IMAGE=${stackImage}
 OPENCLAW_IMAGE=${DEFAULT_OPENCLAW_IMAGE}
@@ -210,6 +213,8 @@ services:
   openclaw-gateway:
     <<: *openclaw-common
     restart: unless-stopped
+    # Keep the host publish loopback-only by default. OPENCLAW_GATEWAY_BIND remains "lan"
+    # inside the container so Docker bridge traffic can still reach the gateway process.
     ports:
       - "127.0.0.1:\${OPENCLAW_GATEWAY_PORT}:\${OPENCLAW_GATEWAY_PORT}"
     healthcheck:

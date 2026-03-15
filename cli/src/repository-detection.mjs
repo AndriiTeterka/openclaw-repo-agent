@@ -107,8 +107,11 @@ async function detectProjectMetadata(repoRoot, markers) {
     return metadata;
   }
 
-  if (markers.settingsGradle) {
-    const settingsGradle = await readTextFile(path.join(repoRoot, "settings.gradle"), "");
+  if (markers.settingsGradle || markers.settingsGradleKts) {
+    const settingsGradle = await readTextFile(
+      path.join(repoRoot, markers.settingsGradle ? "settings.gradle" : "settings.gradle.kts"),
+      ""
+    );
     metadata.projectName = normalizeDetectedProjectName(parseGradleRootProjectName(settingsGradle), metadata.projectName);
     return metadata;
   }
@@ -134,7 +137,9 @@ export async function detectRepository(repoRoot) {
   const markerEntries = [
     ["gradlew", "gradlew"],
     ["buildGradle", "build.gradle"],
+    ["buildGradleKts", "build.gradle.kts"],
     ["settingsGradle", "settings.gradle"],
+    ["settingsGradleKts", "settings.gradle.kts"],
     ["pomXml", "pom.xml"],
     ["packageJson", "package.json"],
     ["packageLock", "package-lock.json"],
@@ -151,7 +156,7 @@ export async function detectRepository(repoRoot) {
   const metadata = await detectProjectMetadata(repoRoot, markers);
 
   const signals = [];
-  if (markers.gradlew || markers.buildGradle || markers.settingsGradle || markers.pomXml) signals.push("java17");
+  if (markers.gradlew || markers.buildGradle || markers.buildGradleKts || markers.settingsGradle || markers.settingsGradleKts || markers.pomXml) signals.push("java17");
   if (markers.packageJson) signals.push("node20");
   if (markers.pyproject || markers.requirements) signals.push("python311");
   if (markers.goMod) signals.push("go122");
