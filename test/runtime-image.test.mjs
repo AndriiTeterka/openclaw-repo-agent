@@ -51,3 +51,11 @@ test("runtime Dockerfile installs the Codex CLI", async () => {
 
   assert.match(dockerfile, /npm install --global @openai\/codex/);
 });
+
+test("runtime Dockerfile copies manifest-contract runtime dependencies", async () => {
+  const dockerfile = await fs.readFile(path.resolve("runtime/Dockerfile"), "utf8");
+
+  assert.match(dockerfile, /COPY runtime\/shared\.mjs \/opt\/openclaw\/shared\.mjs/);
+  assert.match(dockerfile, /COPY runtime\/supported-acp-agents\.mjs \/opt\/openclaw\/supported-acp-agents\.mjs/);
+  assert.match(dockerfile, /COPY runtime\/manifest-contract\.mjs \/opt\/openclaw\/manifest-contract\.mjs/);
+});

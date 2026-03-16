@@ -358,10 +358,6 @@ function defaultWorkspacePath() {
   return "/workspace";
 }
 
-function defaultWorkspaceSkillsPath(workspace) {
-  return path.posix.join(workspace, ".openclaw", "skills");
-}
-
 function defaultControlUiOrigins(gatewayPort) {
   return [`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`];
 }
@@ -370,7 +366,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
   const gatewayPort = resolveInteger(env.OPENCLAW_GATEWAY_PORT, 18789);
   const workspace = nonEmptyString(env.OPENCLAW_WORKSPACE, defaultWorkspacePath());
   const repoRoot = nonEmptyString(env.OPENCLAW_REPO_ROOT, workspace);
-  const workspaceSkillsDir = nonEmptyString(env.OPENCLAW_WORKSPACE_SKILLS_DIR, defaultWorkspaceSkillsPath(workspace));
   const controlUiAllowedOrigins = parseStringArrayEnv(
     env.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS,
     defaultControlUiOrigins(gatewayPort),
@@ -606,11 +601,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               defaultQueueMode: queueMode,
             },
           },
-        },
-      },
-      skills: {
-        load: {
-          extraDirs: [workspaceSkillsDir],
         },
       },
     },

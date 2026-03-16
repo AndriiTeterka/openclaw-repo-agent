@@ -1,9 +1,12 @@
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
-import readline from "node:readline/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import chalk from "chalk";
+import inquirer from "inquirer";
+import ora from "ora";
 
 import {
   deepMerge,
@@ -70,14 +73,8 @@ import {
   upsertInstanceRegistryEntry
 } from "./instance-registry.mjs";
 import {
-  normalizeWorkspaceSkillsConfig,
-  readWorkspaceSkillsStatus,
-  summarizeWorkspaceSkillFailures,
-  summarizeWorkspaceSkillsStatus,
-  syncWorkspaceSkills
-} from "./workspace-skills.mjs";
-import {
-  printReport
+  printReport,
+  renderStatusMarker
 } from "./reporting.mjs";
 
 const ARRAY_FLAGS = new Set([
@@ -136,7 +133,6 @@ const DEFAULT_STATE_MANIFEST_FILE = "project-manifest.json";
 const DEFAULT_STATE_ENV_FILE = "runtime.env";
 const DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE = "docker-mcp.config.yaml";
 const DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE = "docker-mcp.secrets.json";
-const DEFAULT_STATE_SKILLS_STATUS_FILE = "skills-status.json";
 const DEFAULT_LOCAL_ENV_FILE = "local.env";
 const DEFAULT_LOCAL_ENV_EXAMPLE_FILE = "local.env.example";
 const DEFAULT_PLUGIN_FILE = "plugin.json";
@@ -151,7 +147,7 @@ export const ACP_AGENT_CHOICES = [
 ];
 
 export const CODEX_AUTH_SOURCE_CHOICES = [
-  { value: "auth-folder", label: "Use existing Codex login folder" },
+  { value: "auth-folder", label: "Use OpenAI subscription login" },
   { value: "api-key", label: "Use OpenAI API key" }
 ];
 
@@ -550,10 +546,11 @@ function toCamelCase(value) {
   return value.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
-function printCommandReport(status, title, summary = [], sections = []) {
+function printCommandReport(status, title, summary = [], sections = [], meta = {}) {
   printReport({
     status,
     title,
+    summaryTitle: meta.summaryTitle || "Overview",
     summary,
     sections
   });
@@ -576,6 +573,100 @@ function summarizeCommandFailure(command, result, fallbackMessage) {
     .filter(Boolean)
     .find((line) => !/^\[(warn|info|notice)\]/i.test(line));
   return detail ? `${fallbackMessage} ${detail}` : fallbackMessage;
+}
+
+function shouldUseSpinner(options = {}) {
+  return !options.json && Boolean(process.stdout?.isTTY);
+}
+
+async function runWithSpinner(text, task, options = {}) {
+  if (!shouldUseSpinner(options)) return await task();
+  const spinner = ora({
+    text,
+    color: "cyan",
+    discardStdin: false
+  }).start();
+
+  try {
+    const result = await task();
+    spinner.stop();
+    return result;
+  } catch (error) {
+    spinner.stop();
+    throw error;
+  }
+}
+
+function resolvePromptChoiceValue(answer, choices, fallbackValue) {
+  const normalized = String(answer ?? "").trim();
+  if (!normalized) return fallbackValue;
+
+  const numericIndex = Number.parseInt(normalized, 10);
+  if (Number.isInteger(numericIndex) && numericIndex >= 1 && numericIndex <= choices.length) {
+    return choices[numericIndex - 1].value;
+  }
+
+  const exact = choices.find((choice) => choice.value === normalized);
+  return exact?.value || "";
+}
+
+function createInteractivePrompter() {
+  return {
+    async select(message, choices, fallbackValue) {
+      const defaultIndex = Math.max(choices.findIndex((choice) => choice.value === fallbackValue), 0);
+      console.log("");
+      choices.forEach((choice, index) => {
+        const prefix = chalk.gray(`  ${index + 1}.`);
+        const suffix = index === defaultIndex ? chalk.gray(" (default)") : "";
+        console.log(`${prefix} ${choice.label}${suffix}`);
+      });
+      const { value } = await inquirer.prompt([{
+        type: "input",
+        name: "value",
+        message: `Choose ${message}`,
+        default: "",
+        filter(inputValue) {
+          return resolvePromptChoiceValue(inputValue, choices, fallbackValue);
+        },
+        validate(inputValue) {
+          if (resolvePromptChoiceValue(inputValue, choices, fallbackValue)) return true;
+          return `Enter a number between 1 and ${choices.length}, or one of: ${choices.map((choice) => choice.value).join(", ")}.`;
+        }
+      }]);
+      return String(value ?? "").trim();
+    },
+    async input(message, fallback = "", options = {}) {
+      const { value } = await inquirer.prompt([{
+        type: "input",
+        name: "value",
+        message,
+        default: fallback || undefined,
+        validate(inputValue) {
+          const normalized = String(inputValue ?? "").trim();
+          if (normalized || fallback || !options.required) return true;
+          return `${message} is required.`;
+        }
+      }]);
+      return String(value ?? "").trim() || fallback;
+    },
+    async password(message, fallback = "", options = {}) {
+      const { value } = await inquirer.prompt([{
+        type: "input",
+        name: "value",
+        message,
+        default: undefined,
+        transformer(inputValue) {
+          return String(inputValue ?? "").replace(/./g, "*");
+        },
+        validate(inputValue) {
+          const normalized = String(inputValue ?? "").trim();
+          if (normalized || fallback || !options.required) return true;
+          return `${message} is required.`;
+        }
+      }]);
+      return String(value ?? "").trim() || fallback;
+    }
+  };
 }
 
 function resolveProductRoot(explicitProductRoot) {
@@ -601,7 +692,6 @@ function resolvePaths(repoRoot) {
     runtimeEnvFile: path.join(stateDir, DEFAULT_STATE_ENV_FILE),
     dockerMcpConfigFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE),
     dockerMcpSecretsFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE),
-    skillsStatusFile: path.join(stateDir, DEFAULT_STATE_SKILLS_STATUS_FILE),
     emptyAuthDir: path.join(stateDir, "auth-empty")
   };
 }
@@ -715,7 +805,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
     instructionFiles: uniqueStrings(instructionFiles),
     knowledgeFiles: uniqueStrings(knowledgeFiles.length > 0 ? knowledgeFiles : [".openclaw/knowledge.md"]),
     verificationCommands: uniqueStrings(verificationCommands),
-    skills: deepMerge(merged.skills ?? {}),
     agent: deepMerge(merged.agent ?? {}),
     telegram: deepMerge(merged.telegram ?? {}),
     acp: deepMerge(merged.acp ?? {}),
@@ -752,8 +841,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   delete plugin.telegram.allowFrom;
   delete plugin.telegram.groupAllowFrom;
   delete plugin.telegram.proxy;
-
-  plugin.skills = normalizeWorkspaceSkillsConfig(plugin.skills);
 
   plugin.acp.defaultAgent = assertSupportedAcpAgent(
     String(options.acpDefaultAgent ?? plugin.acp.defaultAgent ?? "").trim(),
@@ -951,11 +1038,6 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, det
     ? path.resolve(effectiveTargetAuthPath.replace(/\//g, path.sep))
     : context.paths.emptyAuthDir;
   const telegramTokenHash = fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN);
-  const workspaceSkills = normalizeWorkspaceSkillsConfig(plugin.skills);
-  const workspaceSkillsDir = String(workspaceSkills.directory).replace(/\\/g, "/").replace(/^\.\//, "");
-  const workspaceSkillsContainerPath = workspaceSkillsDir.startsWith("/")
-    ? workspaceSkillsDir
-    : path.posix.join("/workspace", workspaceSkillsDir);
 
   return {
     OPENCLAW_COMPOSE_PROJECT_NAME: context.composeProjectName,
@@ -974,7 +1056,6 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, det
     OPENCLAW_GATEWAY_TOKEN: localEnv.OPENCLAW_GATEWAY_TOKEN || randomToken(),
     OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: controlUiOrigins,
     OPENCLAW_REPO_ROOT_HOST: toDockerPath(context.repoRoot),
-    OPENCLAW_WORKSPACE_SKILLS_DIR: workspaceSkillsContainerPath,
     OPENCLAW_TELEGRAM_TOKEN_HASH: telegramTokenHash,
     TELEGRAM_BOT_TOKEN: localEnv.TELEGRAM_BOT_TOKEN || "",
     OPENAI_API_KEY: localEnv.OPENAI_API_KEY || "",
@@ -1083,6 +1164,28 @@ async function openclawHostCommand(context, args, options = {}) {
 
 async function openclawGatewayCommand(context, args, options = {}) {
   return await dockerCompose(context, ["exec", "-T", "openclaw-gateway", "openclaw", ...args], options);
+}
+
+function extractDashboardUrl(output) {
+  const match = String(output ?? "").match(/https?:\/\/\S+/);
+  return match ? match[0].trim() : "";
+}
+
+async function resolveDashboardUrl(context) {
+  const result = await openclawGatewayCommand(context, ["dashboard", "--no-open"], { capture: true });
+  if (result.code !== 0) {
+    throw new Error(summarizeCommandFailure(
+      "openclaw dashboard --no-open",
+      result,
+      "Failed to resolve the dashboard URL."
+    ));
+  }
+
+  const dashboardUrl = extractDashboardUrl([result.stdout, result.stderr].filter(Boolean).join("\n"));
+  if (!dashboardUrl) {
+    throw new Error("Failed to resolve the dashboard URL.");
+  }
+  return dashboardUrl;
 }
 
 async function gatewayRunning(context) {
@@ -1359,52 +1462,45 @@ function emptyDockerMcpSecretStatus() {
   };
 }
 
-async function readWorkspaceSkillHealth(context, plugin) {
-  const status = await readWorkspaceSkillsStatus(context, plugin.skills);
-  return {
-    status,
-    ...summarizeWorkspaceSkillsStatus(status),
-    failures: summarizeWorkspaceSkillFailures(status)
-  };
+function capitalizeSentence(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function formatWorkspaceSkillsSummary(workspaceSkills) {
-  const segments = [`${workspaceSkills.requiredReadyCount}/${workspaceSkills.requiredCount} mandatory ready`];
-  if (workspaceSkills.discoveredCount > 0) {
-    segments.push(`${workspaceSkills.discoveredCount} recommendations${workspaceSkills.discoveredReadyCount > 0 ? ` (${workspaceSkills.discoveredReadyCount} installed)` : ""}`);
-  } else {
-    segments.push("0 recommendations");
-  }
-  if (workspaceSkills.discoveryErrors.length > 0) {
-    segments.push(`${workspaceSkills.discoveryErrors.length} discovery error${workspaceSkills.discoveryErrors.length === 1 ? "" : "s"}`);
-  }
-  return segments.join(", ");
-}
-
-function buildWorkspaceSkillsSections(workspaceSkills, options = {}) {
-  const sections = [];
-  const failurePrefix = options.failurePrefix ?? "Workspace skill not ready";
-  const recommendationIntro = options.recommendationIntro ?? "Review recommended skills with Skill Vetter before installing them manually.";
-
-  const warningSection = buildStatusSection("Warnings", "warning", [
-    ...workspaceSkills.failures.map((failure) => `${failurePrefix}: ${failure}`),
-    ...workspaceSkills.discoveryErrors.map((entry) => `Workspace skill discovery warning [${entry.query}]: ${entry.error}`)
-  ]);
-  if (warningSection) sections.push(warningSection);
-
-  const recommendationSection = buildStatusSection("Recommendations", "info", [
-    ...workspaceSkills.pendingRecommendations.map((recommendation) => (
-      `${recommendation.name} (${recommendation.source || recommendation.slug})${recommendation.query ? ` [query: ${recommendation.query}]` : ""}`
-    )),
-    ...(workspaceSkills.pendingRecommendations.length > 0 ? [recommendationIntro] : [])
-  ]);
-  if (recommendationSection) sections.push(recommendationSection);
-
-  return sections;
+function formatAgentSummary(acpDefaultAgent, manifest, localEnv = {}) {
+  const agent = String(acpDefaultAgent ?? "").trim();
+  if (!agent) return "";
+  if (agent !== "codex") return agent;
+  const agentLabel = "Codex";
+  if (manifest?.security?.authBootstrapMode !== "codex") return `${agentLabel} (external auth)`;
+  const apiKey = String(localEnv.OPENAI_API_KEY ?? "").trim();
+  if (apiKey) return `${agentLabel} (OpenAI API key)`;
+  return `${agentLabel} (OpenAI subscription login)`;
 }
 
 function buildPreparedSection(items) {
-  return buildStatusSection("Prepared", "info", items);
+  return buildStatusSection("Files", "success", items.map((item) => ({
+    status: "success",
+    text: item
+  })));
+}
+
+function buildNextStepsSection(items) {
+  return buildStatusSection("Next steps", "info", items.map((item) => {
+    if (typeof item === "string") {
+      return {
+        status: "info",
+        icon: "»",
+        text: item
+      };
+    }
+    return {
+      status: item?.status || "info",
+      icon: item?.icon || "»",
+      text: item?.text || ""
+    };
+  }));
 }
 
 function buildDashboardUrl(port) {
@@ -1422,15 +1518,6 @@ function summarizeDoctorResults(results) {
     else summary.fail += 1;
     return summary;
   }, { ok: 0, info: 0, warn: 0, fail: 0 });
-}
-
-async function ensureWorkspaceSkillBaseline(context, plugin) {
-  const sync = await syncWorkspaceSkills(context, plugin.skills);
-  const health = await readWorkspaceSkillHealth(context, plugin);
-  return {
-    ...sync,
-    ...health
-  };
 }
 
 async function ensureRuntimeImageReady(context, state, options = {}) {
@@ -1583,24 +1670,47 @@ async function activateDockerMcpForRepo(context, options = {}) {
   };
 }
 
-async function promptRequired(rl, label, fallback = "") {
+async function promptRequired(prompter, label, fallback = "", options = {}) {
+  if (typeof prompter?.input === "function" || typeof prompter?.password === "function") {
+    return options.secret
+      ? await prompter.password(label, fallback, { required: true })
+      : await prompter.input(label, fallback, { required: true });
+  }
+
   while (true) {
     const suffix = fallback ? ` [${fallback}]` : "";
-    const answer = (await rl.question(`${label}${suffix}: `)).trim() || fallback;
+    const answer = (await prompter.question(`${label}${suffix}: `)).trim() || fallback;
     if (answer) return answer;
-    console.log(`${label} is required.`);
+    console.log(`${renderStatusMarker("warning")} ${label} is required.`);
   }
 }
 
-export async function promptChoice(rl, label, choices, fallbackValue) {
+async function promptOptional(prompter, label, fallback = "", options = {}) {
+  if (typeof prompter?.input === "function" || typeof prompter?.password === "function") {
+    return options.secret
+      ? await prompter.password(label, fallback, { required: false })
+      : await prompter.input(label, fallback, { required: false });
+  }
+
+  const suffix = fallback ? ` [${fallback}]` : "";
+  const answer = (await prompter.question(`${label}${suffix}: `)).trim();
+  return answer || fallback;
+}
+
+export async function promptChoice(prompter, label, choices, fallbackValue) {
+  if (typeof prompter?.select === "function") {
+    return await prompter.select(label, choices, fallbackValue);
+  }
+
   const defaultIndex = Math.max(choices.findIndex((choice) => choice.value === fallbackValue), 0);
-  console.log(`${label}:`);
+  console.log("");
+  console.log(`${renderStatusMarker("info")} ${label}`);
   choices.forEach((choice, index) => {
     console.log(`  ${index + 1}. ${choice.label}${index === defaultIndex ? " (default)" : ""}`);
   });
 
   while (true) {
-    const answer = (await rl.question(`Choose ${label.toLowerCase()} [${defaultIndex + 1}]: `)).trim();
+    const answer = (await prompter.question(`Choose ${label.toLowerCase()} [${defaultIndex + 1}]: `)).trim();
     if (!answer) return choices[defaultIndex].value;
 
     const numericIndex = Number.parseInt(answer, 10);
@@ -1611,7 +1721,7 @@ export async function promptChoice(rl, label, choices, fallbackValue) {
     const exact = choices.find((choice) => choice.value === answer);
     if (exact) return exact.value;
 
-    console.log(`Enter a number between 1 and ${choices.length}, or one of: ${choices.map((choice) => choice.value).join(", ")}.`);
+    console.log(`${renderStatusMarker("warning")} Enter a number between 1 and ${choices.length}, or one of: ${choices.map((choice) => choice.value).join(", ")}.`);
   }
 }
 
@@ -1625,7 +1735,7 @@ export function defaultCodexAuthSource(existingLocalEnv, options, detectedCodexA
   return "auth-folder";
 }
 
-export async function collectInitPromptState(rl, context, plugin, existingLocalEnv, options, detectedCodexAuthPath = "") {
+export async function collectInitPromptState(prompter, context, plugin, existingLocalEnv, options, detectedCodexAuthPath = "") {
   const profile = plugin.profile;
   const projectName = plugin.projectName;
   const toolingProfile = plugin.toolingProfile;
@@ -1636,15 +1746,15 @@ export async function collectInitPromptState(rl, context, plugin, existingLocalE
   const knowledgeFiles = plugin.knowledgeFiles;
   const verificationCommands = plugin.verificationCommands;
 
-  const acpDefaultAgent = await promptChoice(rl, "ACP default agent", ACP_AGENT_CHOICES, plugin.acp.defaultAgent || "codex");
+  const acpDefaultAgent = await promptChoice(prompter, "ACP default agent", ACP_AGENT_CHOICES, plugin.acp.defaultAgent || "codex");
   let openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
   let targetAuthPath = String(existingLocalEnv.TARGET_AUTH_PATH ?? "") || detectedCodexAuthPath;
   let authMode = resolvePreferredAuthMode(plugin.security.authBootstrapMode, acpDefaultAgent);
 
   if (acpDefaultAgent === "codex") {
     const authSource = await promptChoice(
-      rl,
-      "Codex auth source",
+      prompter,
+      "codex auth source",
       CODEX_AUTH_SOURCE_CHOICES,
       defaultCodexAuthSource(existingLocalEnv, options, detectedCodexAuthPath)
     );
@@ -1652,14 +1762,14 @@ export async function collectInitPromptState(rl, context, plugin, existingLocalE
     authMode = "codex";
     if (authSource === "auth-folder") {
       openAiApiKey = "";
-      if (!targetAuthPath) {
-        targetAuthPath = await promptRequired(rl, "Codex login folder");
-      }
+        if (!targetAuthPath) {
+          targetAuthPath = await promptRequired(prompter, "OpenAI subscription login folder");
+        }
     } else {
       targetAuthPath = "";
       openAiApiKey = String(existingLocalEnv.OPENAI_API_KEY ?? "");
       if (!openAiApiKey) {
-        openAiApiKey = await promptRequired(rl, "OpenAI API key");
+        openAiApiKey = await promptRequired(prompter, "OpenAI API key", "", { secret: true });
       }
     }
   } else {
@@ -1667,10 +1777,9 @@ export async function collectInitPromptState(rl, context, plugin, existingLocalE
   }
 
   const hasTelegramToken = Boolean(existingLocalEnv.TELEGRAM_BOT_TOKEN) && !String(existingLocalEnv.TELEGRAM_BOT_TOKEN).startsWith("replace-with-");
-  const telegramTokenHint = hasTelegramToken ? "configured" : "replace-with-your-botfather-token";
   const telegramBotTokenInput = hasTelegramToken
     ? ""
-    : (await rl.question(`Telegram bot token [${telegramTokenHint}]: `)).trim();
+    : await promptOptional(prompter, "Telegram bot token", "", { secret: true });
 
   const acpAllowedAgents = normalizeAllowedAgents(acpDefaultAgent, plugin.acp.allowedAgents);
 
@@ -1727,16 +1836,14 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
     return { plugin, localEnv: {} };
   }
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-
-  try {
-    return await collectInitPromptState(rl, context, plugin, existingLocalEnv, options, detectedCodexAuthPath);
-  } finally {
-    rl.close();
-  }
+  return await collectInitPromptState(
+    createInteractivePrompter(),
+    context,
+    plugin,
+    existingLocalEnv,
+    options,
+    detectedCodexAuthPath
+  );
 }
 
 async function handleInit(context, options) {
@@ -1766,9 +1873,7 @@ async function handleInit(context, options) {
   }
 
   const shouldWritePlugin = !existingPlugin || options.force || JSON.stringify(existingPlugin) !== JSON.stringify(plugin);
-  const pluginStatus = shouldWritePlugin
-    ? `${existingPlugin ? "Updated" : "Wrote"} ${path.relative(context.repoRoot, context.paths.pluginFile)}`
-    : `Keeping existing ${path.relative(context.repoRoot, context.paths.pluginFile)}`;
+  const pluginStatus = path.relative(context.repoRoot, context.paths.pluginFile);
   if (shouldWritePlugin) {
     await writeJsonFile(context.paths.pluginFile, plugin);
   }
@@ -1789,47 +1894,47 @@ async function handleInit(context, options) {
   }
 
   await ensureGitignoreEntries(context.repoRoot);
-  const state = await prepareState(context, options);
+  const state = await runWithSpinner("Preparing workspace state", () => prepareState(context, options), options);
   await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample(state.useLocalBuild, {
     instanceId: context.instanceId,
     gatewayPort: state.localEnv.OPENCLAW_GATEWAY_PORT,
     portManaged: state.localEnv.OPENCLAW_PORT_MANAGED,
     stackImage: state.localEnv.OPENCLAW_STACK_IMAGE
   }));
-  const mcp = await ensureDockerMcpSetup(context, {
+  const mcp = await runWithSpinner("Syncing Docker MCP", () => ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
-  });
-  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, plugin);
+  }), options);
   const registeredConflicts = findRegisteredTelegramTokenConflicts(context, state.instanceRegistry, state.localEnv);
 
   printCommandReport("success", "Init complete", [
     { label: "Repo", value: context.repoRoot },
-    { label: "Project", value: plugin.projectName },
-    { label: "Preset", value: plugin.profile },
-    { label: "Tooling", value: state.manifest.toolingProfile },
-    { label: "Instance", value: context.instanceId },
-    { label: "Compose", value: context.composeProjectName },
-    { label: "Gateway", value: `${buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT)} (${shouldManageGatewayPort(state.localEnv) ? "managed" : "manual"})` },
-    { label: "Runtime", value: `${state.manifest.runtimeProfile} / ${state.manifest.queueProfile}` },
-    { label: "Auth", value: state.manifest.security.authBootstrapMode },
-    { label: "ACP", value: plugin.acp.defaultAgent },
-    { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
-    { label: "Docker MCP", value: `${context.dockerMcpProfile} (${mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready"})` }
+    { label: "Gateway", value: buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) },
+    { label: "Agent", value: formatAgentSummary(plugin.acp.defaultAgent, state.manifest, state.localEnv) }
   ], [
     buildPreparedSection([
       pluginStatus,
       path.relative(context.repoRoot, context.paths.localEnvFile),
       path.relative(context.repoRoot, context.paths.manifestFile),
       path.relative(context.repoRoot, context.paths.composeFile),
-      path.relative(context.repoRoot, context.paths.dockerMcpConfigFile),
-      plugin.skills.directory
+      path.relative(context.repoRoot, context.paths.dockerMcpConfigFile)
     ]),
-    ...buildWorkspaceSkillsSections(workspaceSkills),
+    buildStatusSection("Integrations", "info", [
+      {
+        status: "success",
+        icon: "✔",
+        text: `Docker MCP: ${capitalizeSentence(mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready")}`
+      }
+    ]),
     buildStatusSection("Warnings", "warning", registeredConflicts.length > 0
       ? [`This Telegram bot token is also configured in ${registeredConflicts.length} other registered repo instance(s).`]
-      : [])
-  ].filter(Boolean));
+      : []),
+    buildNextStepsSection([
+      `Run \`${PRODUCT_NAME} up\` to start the OpenClaw gateway for this repo.`
+    ])
+  ].filter(Boolean), {
+    summaryTitle: "Configuration"
+  });
 }
 
 async function handleConfigValidate(context, options) {
@@ -1875,31 +1980,32 @@ async function handleConfigMigrate(context, options) {
 }
 
 async function handleUp(context, options) {
-  let state = await prepareState(context, options);
-  const mcp = await ensureDockerMcpSetup(context, {
+  let state = await runWithSpinner("Preparing runtime state", () => prepareState(context, options), options);
+  const mcp = await runWithSpinner("Syncing Docker MCP", () => ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
-  });
-  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, state.plugin);
+  }), options);
   if (state.manifest.deploymentProfile === "native-dev") {
     printCommandReport("success", "Up complete", [
       { label: "Repo", value: context.repoRoot },
-      { label: "Project", value: state.manifest.projectName },
-      { label: "Instance", value: context.instanceId },
       { label: "Deployment", value: "native-dev" },
-      { label: "Manifest", value: path.relative(context.repoRoot, context.paths.manifestFile) },
-      { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
-      { label: "Docker MCP", value: `${context.dockerMcpProfile} (${mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready"})` }
+      { label: "Manifest", value: path.relative(context.repoRoot, context.paths.manifestFile) }
     ], [
-      ...buildWorkspaceSkillsSections(workspaceSkills),
-      buildStatusSection("Next steps", "info", [
+      buildStatusSection("Integrations", "info", [
+        {
+          status: "success",
+          icon: "✔",
+          text: `Docker MCP: ${mcp.actions.length > 0 ? mcp.actions.join(", ") : "ready"}`
+        }
+      ]),
+      buildNextStepsSection([
         `Use ${path.relative(context.repoRoot, context.paths.manifestFile)} with the official OpenClaw onboarding flow.`
       ])
     ].filter(Boolean));
     return;
   }
 
-  const runtimeReady = await ensureRuntimeImageReady(context, state, options);
+  const runtimeReady = await runWithSpinner("Checking runtime image", () => ensureRuntimeImageReady(context, state, options), options);
   state = runtimeReady.state;
   const portState = await detectGatewayPortState(context, state.localEnv);
   if (!portState.ok) {
@@ -1913,26 +2019,28 @@ async function handleUp(context, options) {
     throw new Error(`Telegram bot token is already in use by another running repo instance: ${details}. Use a separate bot token per repo.`);
   }
   if (state.useLocalBuild) {
-    await ensureLocalRuntimeImageBuilt(context);
+    await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
   }
-  await dockerCompose(context, buildComposeUpArgs(state.useLocalBuild));
+  await runWithSpinner("Starting OpenClaw stack", () => dockerCompose(context, buildComposeUpArgs(state.useLocalBuild)), options);
+  const dashboardUrl = await runWithSpinner("Resolving dashboard URL", () => resolveDashboardUrl(context), options);
   printCommandReport("success", "Up complete", [
     { label: "Repo", value: context.repoRoot },
-    { label: "Project", value: state.manifest.projectName },
-    { label: "Instance", value: context.instanceId },
-    { label: "Compose", value: context.composeProjectName },
-    { label: "Gateway", value: buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) },
-    { label: "Runtime image", value: state.useLocalBuild ? context.localRuntimeImage : (state.localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage()) },
+    { label: "Dashboard", value: dashboardUrl },
     { label: "Deployment", value: state.manifest.deploymentProfile },
-    { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
-    { label: "Docker MCP", value: `${context.dockerMcpProfile} (${mcp.profileActive && codexTargetsRepoConfig(mcp) ? "active" : "ready but inactive"})` }
+    { label: "Runtime image", value: state.useLocalBuild ? context.localRuntimeImage : (state.localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage()) }
   ], [
-    ...buildWorkspaceSkillsSections(workspaceSkills),
+    buildStatusSection("Integrations", "info", [
+      {
+        status: mcp.profileActive && codexTargetsRepoConfig(mcp) ? "success" : "info",
+        icon: mcp.profileActive && codexTargetsRepoConfig(mcp) ? "✔" : "ℹ",
+        text: `Docker MCP: ${mcp.profileActive && codexTargetsRepoConfig(mcp) ? "active for this repo" : "ready but inactive"}`
+      }
+    ]),
     buildStatusSection("Warnings", "warning", [
       runtimeReady.autoSwitchedToLocalBuild ? "Remote runtime image was unavailable. Falling back to a local runtime build." : "",
       runtimeReady.autoSwitchedToLocalBuild ? `Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.` : ""
     ]),
-    buildStatusSection("Next steps", "info", !mcp.profileActive || !codexTargetsRepoConfig(mcp)
+    buildNextStepsSection(!mcp.profileActive || !codexTargetsRepoConfig(mcp)
       ? [`Docker MCP profile ${context.dockerMcpProfile} is ready but inactive. Run \`${PRODUCT_NAME} mcp use\` when you want Codex to target this repo.`]
       : [])
   ].filter(Boolean));
@@ -2175,7 +2283,6 @@ async function checkLatestPackageVersion(packageName) {
 
 async function handleStatus(context, options) {
   const state = await prepareState(context, options);
-  const workspaceSkills = await readWorkspaceSkillHealth(context, state.plugin);
   const packageName = process.env.NPM_PACKAGE_NAME || DEFAULT_NPM_PACKAGE_NAME;
   const latestVersion = options.checkUpdates ? await checkLatestPackageVersion(packageName) : null;
   const updateStatus = latestVersion
@@ -2206,20 +2313,6 @@ async function handleStatus(context, options) {
       queueProfile: state.manifest.queueProfile,
       authMode: state.manifest.security.authBootstrapMode,
       verificationCommands: state.manifest.verificationCommands
-    },
-    skills: {
-      directory: workspaceSkills.status.directory,
-      configuredCount: workspaceSkills.configuredCount,
-      readyCount: workspaceSkills.readyCount,
-      ok: workspaceSkills.ok,
-      allReady: workspaceSkills.allReady,
-      requiredCount: workspaceSkills.requiredCount,
-      requiredReadyCount: workspaceSkills.requiredReadyCount,
-      discoveredCount: workspaceSkills.discoveredCount,
-      discoveredReadyCount: workspaceSkills.discoveredReadyCount,
-      discoveryErrors: workspaceSkills.discoveryErrors,
-      recommendations: workspaceSkills.pendingRecommendations,
-      entries: workspaceSkills.status.skills
     }
   };
   const dockerMcpAvailable = (await dockerMcpCapture(["--help"], context.repoRoot)).code === 0;
@@ -2245,21 +2338,21 @@ async function handleStatus(context, options) {
       { label: "Version", value: PRODUCT_VERSION },
       { label: "Update", value: updateStatus },
       { label: "Repo", value: context.repoRoot },
-      { label: "Project", value: state.manifest.projectName },
-      { label: "Instance", value: context.instanceId },
-      { label: "Compose", value: context.composeProjectName },
       { label: "Gateway", value: running ? buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) : "stopped" },
-      { label: "Gateway port", value: `${state.localEnv.OPENCLAW_GATEWAY_PORT} (${shouldManageGatewayPort(state.localEnv) ? "managed" : "manual"})` },
       { label: "Profiles", value: `${state.manifest.deploymentProfile} / ${state.manifest.toolingProfile} / ${state.manifest.runtimeProfile} / ${state.manifest.queueProfile}` },
-      { label: "Auth", value: state.manifest.security.authBootstrapMode },
-      { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
-      { label: "Docker MCP", value: payload.mcp.available ? `${context.dockerMcpProfile} (${codexTargetsRepoConfig(payload.mcp) ? "active" : "ready but inactive"})` : "unavailable" },
-      { label: "MCP secrets", value: payload.mcp.available ? `${payload.mcp.secretStatus.syncedConfiguredCount}/${payload.mcp.secretStatus.configuredCount} synced` : "(unavailable)" },
-      { label: "Verification", value: state.manifest.verificationCommands }
+      { label: "Auth", value: state.manifest.security.authBootstrapMode }
     ], [
-      ...buildWorkspaceSkillsSections(workspaceSkills, {
-        failurePrefix: "Workspace skill warning"
-      }),
+      buildStatusSection("Verification", "info", state.manifest.verificationCommands.length > 0
+        ? state.manifest.verificationCommands
+        : ["No verification commands configured."]),
+      buildStatusSection("Integrations", "info", [
+        payload.mcp.available
+          ? `Docker MCP: ${codexTargetsRepoConfig(payload.mcp) ? "active for this repo" : "ready but inactive"}`
+          : "Docker MCP: unavailable",
+        payload.mcp.available
+          ? `Managed secrets: ${payload.mcp.secretStatus.syncedConfiguredCount}/${payload.mcp.secretStatus.configuredCount} synced`
+          : ""
+      ]),
       buildStatusSection("Warnings", "warning", legacyContainers.length > 0
         ? [`Legacy compose project detected: ${context.legacyComposeProjectName}`]
         : [])
@@ -2274,7 +2367,6 @@ function pushCheck(results, key, ok, detail, recovery = "", level = "error") {
 async function handleDoctor(context, options) {
   let state = await prepareState(context, options);
   const results = [];
-  const workspaceSkills = await readWorkspaceSkillHealth(context, state.plugin);
 
   const dockerVersion = await safeRunCommand("docker", ["--version"]);
   pushCheck(
@@ -2369,38 +2461,6 @@ async function handleDoctor(context, options) {
     manifestErrors.length === 0 ? "Manifest rendered successfully." : manifestErrors.join("; "),
     manifestErrors.length === 0 ? "" : "Run `openclaw-repo-agent config validate` and fix the reported fields."
   );
-
-  pushCheck(
-    results,
-    "workspace-skills",
-    workspaceSkills.ok,
-    workspaceSkills.ok
-      ? `Workspace skills are ready (${formatWorkspaceSkillsSummary(workspaceSkills)}).`
-      : workspaceSkills.failures.join("; "),
-    workspaceSkills.ok ? "" : "Run `openclaw-repo-agent up` or `openclaw-repo-agent update` to retry the mandatory workspace skill sync."
-  );
-  if (workspaceSkills.pendingRecommendations.length > 0) {
-    pushCheck(
-      results,
-      "workspace-skills-recommended",
-      true,
-      workspaceSkills.pendingRecommendations
-        .map((entry) => `${entry.name} (${entry.source || entry.slug})${entry.lastError ? `: ${entry.lastError}` : ""}`)
-        .join("; "),
-      "Review recommended skills with Skill Vetter before installing them manually.",
-      "info"
-    );
-  }
-  if (workspaceSkills.discoveryErrors.length > 0) {
-    pushCheck(
-      results,
-      "workspace-skills-discovery",
-      false,
-      workspaceSkills.discoveryErrors.map((entry) => `${entry.query}: ${entry.error}`).join("; "),
-      "Run `openclaw-repo-agent up` or `openclaw-repo-agent update` to retry repo-specific workspace skill discovery.",
-      "warning"
-    );
-  }
 
   if (!state.useLocalBuild) {
     const pull = await dockerCompose(context, ["pull", "openclaw-gateway"], { capture: true });
@@ -2530,13 +2590,9 @@ async function handleDoctor(context, options) {
     const summary = summarizeDoctorResults(results);
     printCommandReport(ok ? "success" : "warning", "Doctor", [
       { label: "Repo", value: context.repoRoot },
-      { label: "Project", value: state.manifest.projectName },
-      { label: "Instance", value: context.instanceId },
+      { label: "Result", value: ok ? "ready" : "needs attention" },
       { label: "Checks", value: `${summary.ok} ok, ${summary.info} info, ${summary.warn} warn, ${summary.fail} fail` },
-      { label: "Gateway", value: running ? buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) : "stopped" },
-      { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
-      { label: "Docker MCP", value: dockerMcpVersion.code === 0 ? `${context.dockerMcpProfile} (${summary.info > 0 ? "repo-scoped checks pending" : "ready"})` : "unavailable" },
-      { label: "Result", value: ok ? "ready" : "needs attention" }
+      { label: "Gateway", value: running ? buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) : "stopped" }
     ], [
       buildStatusSection("Checks", "info", results.map((result) => ({
         status: result.ok ? "success" : result.level,
@@ -2553,13 +2609,12 @@ async function handleDoctor(context, options) {
 
 async function handleUpdate(context, options) {
   await handleConfigMigrate(context, options);
-  let state = await prepareState(context, options);
-  await ensureDockerMcpSetup(context, {
+  let state = await runWithSpinner("Preparing updated state", () => prepareState(context, options), options);
+  await runWithSpinner("Syncing Docker MCP", () => ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
-  });
-  const workspaceSkills = await ensureWorkspaceSkillBaseline(context, state.plugin);
-  const runtimeReady = await ensureRuntimeImageReady(context, state, options);
+  }), options);
+  const runtimeReady = await runWithSpinner("Checking runtime image", () => ensureRuntimeImageReady(context, state, options), options);
   state = runtimeReady.state;
   const legacyContainers = await detectLegacyComposeProject(context);
   if (legacyContainers.length > 0) {
@@ -2570,23 +2625,18 @@ async function handleUpdate(context, options) {
   }
   if (await gatewayRunning(context)) {
     if (state.useLocalBuild) {
-      await ensureLocalRuntimeImageBuilt(context);
+      await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
     }
-    await dockerCompose(context, buildComposeUpArgs(state.useLocalBuild));
+    await runWithSpinner("Refreshing running stack", () => dockerCompose(context, buildComposeUpArgs(state.useLocalBuild)), options);
   }
   await handleDoctor(context, { ...options, verify: false });
   if (!options.json) {
     printCommandReport("success", "Update complete", [
       { label: "Repo", value: context.repoRoot },
-      { label: "Project", value: state.manifest.projectName },
-      { label: "Instance", value: context.instanceId },
-      { label: "Compose", value: context.composeProjectName },
       { label: "Gateway", value: buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) },
       { label: "Runtime image", value: state.useLocalBuild ? context.localRuntimeImage : (state.localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage()) },
-      { label: "Skills", value: formatWorkspaceSkillsSummary(workspaceSkills) },
       { label: "Legacy cleanup", value: legacyContainers.length > 0 ? "completed" : "not needed" }
     ], [
-      ...buildWorkspaceSkillsSections(workspaceSkills),
       buildStatusSection("Warnings", "warning", [
         runtimeReady.autoSwitchedToLocalBuild ? "Remote runtime image was unavailable. Falling back to a local runtime build." : "",
         runtimeReady.autoSwitchedToLocalBuild ? `Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.` : "",
@@ -2599,7 +2649,7 @@ async function handleUpdate(context, options) {
 async function handleMcpSetup(context, options) {
   await ensureGitignoreEntries(context.repoRoot);
   const payload = {
-    ...(await ensureDockerMcpSetup(context)),
+    ...(await runWithSpinner("Preparing Docker MCP", () => ensureDockerMcpSetup(context), options)),
     nextStep: `Run \`${PRODUCT_NAME} mcp use\` when you want Codex and Docker MCP to target this repo.`
   };
 
@@ -2610,17 +2660,15 @@ async function handleMcpSetup(context, options) {
 
   printCommandReport("success", "MCP setup complete", [
     { label: "Repo", value: context.repoRoot },
-    { label: "Profile", value: context.dockerMcpProfile },
-    { label: "Config", value: path.relative(context.repoRoot, payload.repoConfigPath) },
-    { label: "Active config", value: payload.activeConfigPath || "not set" },
-    { label: "Servers", value: DEFAULT_DOCKER_MCP_SERVERS },
     { label: "Codex", value: codexTargetsRepoConfig(payload) ? "connected" : "not connected" },
-    { label: "Secrets", value: `${payload.secretStatus.syncedConfiguredCount}/${payload.secretStatus.configuredCount} synced` }
+    { label: "Secrets", value: `${payload.secretStatus.syncedConfiguredCount}/${payload.secretStatus.configuredCount} synced` },
+    { label: "Servers", value: DEFAULT_DOCKER_MCP_SERVERS }
   ], [
     buildPreparedSection([path.relative(context.repoRoot, payload.repoConfigPath)]),
-    buildStatusSection("Info", "info", [
+    buildStatusSection("Notes", "info", [
       payload.actions.length > 0 ? `Docker MCP: ${payload.actions.join(", ")}` : "Docker MCP: ready",
       "GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/local.env.",
+      "Use Playwright CLI directly for browser automation; Playwright MCP is not enabled.",
       payload.nextStep
     ])
   ].filter(Boolean));
@@ -2636,10 +2684,10 @@ async function handleMcpUse(context, options) {
 
   printCommandReport("success", "MCP use complete", [
     { label: "Repo", value: context.repoRoot },
-    { label: "Profile", value: context.dockerMcpProfile },
-    { label: "Config", value: payload.repoConfigPath || context.paths.dockerMcpConfigFile },
     { label: "Codex", value: "connected to this repo" },
-    { label: "Next step", value: "Restart Codex if it is already running" }
+    { label: "Config", value: payload.repoConfigPath || context.paths.dockerMcpConfigFile }
+  ], [
+    buildNextStepsSection(["Restart Codex if it is already running."])
   ]);
 }
 
@@ -2672,7 +2720,6 @@ async function handleMcpStatus(context, options) {
     }
     printCommandReport("warning", "MCP status", [
       { label: "Repo", value: context.repoRoot },
-      { label: "Profile", value: context.dockerMcpProfile },
       { label: "Repo config", value: path.relative(context.repoRoot, repoConfigPath) }
     ], [
       buildPreparedSection([path.relative(context.repoRoot, repoConfigPath)]),
@@ -2698,15 +2745,16 @@ async function handleMcpStatus(context, options) {
 
   printCommandReport(payload.profileActive && codexTargetsRepoConfig(payload) ? "success" : "warning", "MCP status", [
     { label: "Repo", value: context.repoRoot },
-    { label: "Profile", value: payload.profileName },
-    { label: "Repo config", value: path.relative(context.repoRoot, repoConfigPath) },
-    { label: "Active config", value: payload.activeConfigPath || "not set" },
-    { label: "Using repo config", value: payload.profileActive },
-    { label: "Codex installed", value: payload.codexInstalled },
     { label: "Codex connected", value: codexTargetsRepoConfig(payload) },
+    { label: "Using repo config", value: payload.profileActive },
     { label: "Secrets", value: `${payload.secretStatus.syncedConfiguredCount}/${payload.secretStatus.configuredCount} synced` }
   ], [
-    buildStatusSection("Next steps", "info", (!payload.profileActive || !codexTargetsRepoConfig(payload))
+    buildPreparedSection([path.relative(context.repoRoot, repoConfigPath)]),
+    buildStatusSection("Notes", "info", [
+      `Docker MCP profile: ${payload.profileName}`,
+      payload.activeConfigPath ? `Active config: ${payload.activeConfigPath}` : "Active config: not set"
+    ]),
+    buildNextStepsSection((!payload.profileActive || !codexTargetsRepoConfig(payload))
       ? [DOCKER_MCP_REQUIRED_RECOVERY]
       : [])
   ].filter(Boolean));
@@ -2742,7 +2790,7 @@ async function handleInstancesList(context, options) {
       { label: "Instance registry", value: context.instanceRegistryFile },
       { label: "Instances", value: 0 }
     ], [
-      buildStatusSection("Info", "info", ["No repo instances are registered on this machine yet."])
+      buildStatusSection("Notes", "info", ["No repo instances are registered on this machine yet."])
     ]);
     return;
   }

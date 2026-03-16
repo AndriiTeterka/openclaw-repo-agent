@@ -9,7 +9,7 @@ import {
 } from "../cli/src/docker-mcp.mjs";
 
 test("DEFAULT_DOCKER_MCP_SERVERS includes context7", () => {
-  assert.deepEqual(DEFAULT_DOCKER_MCP_SERVERS, ["docker", "fetch", "filesystem", "github-official", "playwright", "context7"]);
+  assert.deepEqual(DEFAULT_DOCKER_MCP_SERVERS, ["docker", "fetch", "filesystem", "github-official", "context7"]);
 });
 
 test("buildRepoDockerMcpSecretPrefix is stable for a repo path", () => {

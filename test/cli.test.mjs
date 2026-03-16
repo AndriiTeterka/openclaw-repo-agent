@@ -46,10 +46,6 @@ function createPromptTestPlugin() {
     instructionFiles: [".openclaw/instructions.md"],
     knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: [],
-    skills: {
-      directory: ".openclaw/skills",
-      required: []
-    },
     agent: {
       id: "workspace",
       name: "Demo Workspace"
@@ -121,6 +117,14 @@ test("major command handlers use the shared report renderer", async () => {
   assert.match(source, /printCommandReport\("success", "Update complete"/);
 });
 
+test("up resolves and prints the authenticated dashboard URL", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.match(source, /openclawGatewayCommand\(context, \["dashboard", "--no-open"\], \{ capture: true \}\)/);
+  assert.match(source, /const dashboardUrl = await runWithSpinner\("Resolving dashboard URL", \(\) => resolveDashboardUrl\(context\), options\);/);
+  assert.match(source, /printCommandReport\("success", "Up complete", \[\s*{ label: "Repo", value: context\.repoRoot },\s*{ label: "Dashboard", value: dashboardUrl }/s);
+});
+
 test("version flag prints product version", async () => {
   const { stdout } = await execFileAsync(process.execPath, [cliPath, "--version"], {
     cwd: repoRoot
@@ -150,42 +154,42 @@ test("defaultCodexAuthSource prefers detected auth folders over API keys", () =>
 });
 
 test("promptChoice accepts default and numeric input", async () => {
-  const answers = ["", "2"];
-  const prompts = [];
-  const rl = {
-    async question(prompt) {
-      prompts.push(prompt);
-      return answers.shift() ?? "";
+  const calls = [];
+  const prompter = {
+    async select(message, choices, fallbackValue) {
+      calls.push({ message, choices, fallbackValue });
+      return calls.length === 1 ? fallbackValue : "api-key";
     }
   };
-  const writes = [];
-  const originalLog = console.log;
-  console.log = (...values) => writes.push(values.join(" "));
-  try {
-    const first = await promptChoice(rl, "ACP default agent", ACP_AGENT_CHOICES, "codex");
-    const second = await promptChoice(rl, "Codex auth source", CODEX_AUTH_SOURCE_CHOICES, "auth-folder");
+  const first = await promptChoice(prompter, "ACP default agent", ACP_AGENT_CHOICES, "codex");
+  const second = await promptChoice(prompter, "codex auth source", CODEX_AUTH_SOURCE_CHOICES, "auth-folder");
 
-    assert.equal(first, "codex");
-    assert.equal(second, "api-key");
-    assert.ok(prompts.length >= 2);
-    assert.ok(writes.some((line) => line.includes("ACP default agent:")));
-  } finally {
-    console.log = originalLog;
-  }
+  assert.equal(first, "codex");
+  assert.equal(second, "api-key");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].message, "ACP default agent");
+  assert.equal(calls[1].message, "codex auth source");
 });
 
 test("collectInitPromptState asks Telegram after Codex auth prompts", async () => {
-  const prompts = [];
-  const answers = ["", "", "123:telegram-token"];
-  const rl = {
-    async question(prompt) {
-      prompts.push(prompt);
-      return answers.shift() ?? "";
+  const calls = [];
+  const prompter = {
+    async select(message, choices, fallbackValue) {
+      calls.push(`select:${message}:${fallbackValue}`);
+      return fallbackValue;
+    },
+    async input(message) {
+      calls.push(`input:${message}`);
+      return "";
+    },
+    async password(message) {
+      calls.push(`password:${message}`);
+      return "123:telegram-token";
     }
   };
 
   await collectInitPromptState(
-    rl,
+    prompter,
     createPromptTestContext(),
     createPromptTestPlugin(),
     {},
@@ -193,20 +197,27 @@ test("collectInitPromptState asks Telegram after Codex auth prompts", async () =
     "C:/Users/demo/.codex"
   );
 
-  assert.deepEqual(prompts, [
-    "Choose acp default agent [1]: ",
-    "Choose codex auth source [1]: ",
-    "Telegram bot token [replace-with-your-botfather-token]: "
+  assert.deepEqual(calls, [
+    "select:ACP default agent:codex",
+    "select:codex auth source:auth-folder",
+    "password:Telegram bot token"
   ]);
 });
 
 test("collectInitPromptState asks Telegram after ACP selection for non-codex agents", async () => {
-  const prompts = [];
-  const answers = ["2", "123:telegram-token"];
-  const rl = {
-    async question(prompt) {
-      prompts.push(prompt);
-      return answers.shift() ?? "";
+  const calls = [];
+  const prompter = {
+    async select(message, _choices, fallbackValue) {
+      calls.push(`select:${message}:${fallbackValue}`);
+      return "claude";
+    },
+    async input(message) {
+      calls.push(`input:${message}`);
+      return "";
+    },
+    async password(message) {
+      calls.push(`password:${message}`);
+      return "123:telegram-token";
     }
   };
 
@@ -216,7 +227,7 @@ test("collectInitPromptState asks Telegram after ACP selection for non-codex age
   plugin.security.authBootstrapMode = "external";
 
   await collectInitPromptState(
-    rl,
+    prompter,
     createPromptTestContext(),
     plugin,
     {},
@@ -224,9 +235,9 @@ test("collectInitPromptState asks Telegram after ACP selection for non-codex age
     ""
   );
 
-  assert.deepEqual(prompts, [
-    "Choose acp default agent [2]: ",
-    "Telegram bot token [replace-with-your-botfather-token]: "
+  assert.deepEqual(calls, [
+    "select:ACP default agent:claude",
+    "password:Telegram bot token"
   ]);
 });
 

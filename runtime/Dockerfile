@@ -40,6 +40,7 @@ RUN mkdir -p /home/node/.openclaw \
  && chown -R node:node /home/node
 
 COPY runtime/shared.mjs /opt/openclaw/shared.mjs
+COPY runtime/supported-acp-agents.mjs /opt/openclaw/supported-acp-agents.mjs
 COPY runtime/manifest-contract.mjs /opt/openclaw/manifest-contract.mjs
 COPY runtime/bootstrap-auth.mjs /opt/openclaw/bootstrap-auth.mjs
 COPY runtime/doctor.mjs /opt/openclaw/doctor.mjs

@@ -69,7 +69,7 @@ You can still override detected repo settings and Telegram policy later in `.ope
 The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
 
 - repo config files: `.openclaw/plugin.json`, `.openclaw/instructions.md`, `.openclaw/knowledge.md`, `.openclaw/local.env.example`
-- local runtime files: `.openclaw/local.env`, `.openclaw/state/`, `.openclaw/skills/`
+- local runtime files: `.openclaw/local.env`, `.openclaw/state/`
 
 If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
 
@@ -121,23 +121,10 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 `codex` is the default ACP and bootstrap path now. The CLI prefers an existing Codex login under `CODEX_HOME` or `~/.codex`, and only falls back to prompting for an API key when no local Codex auth path is available.
 
-## Workspace Skills
-
-Every initialized workspace now gets a mandatory repo-local baseline skill pack under `.openclaw/skills`:
-
-- `Skill Vetter`
-- `Find Skills`
-- `pskoett/self-improving-agent`
-
-The repo agent attempts to sync these skills during `init`, `up`, and `update`. It also uses `Find Skills`-style discovery to search for a few repo-specific skills based on the detected stack and records the top matches for review. Skill sync is non-blocking, so the workspace can still initialize if ClawHub or public skill discovery is unavailable, but `status` and `doctor` will report any missing mandatory skills, recommended repo-specific skills, or discovery errors.
-
-The rendered OpenClaw config loads `.openclaw/skills` automatically. Repo-specific skills are suggested during sync instead of being auto-installed, and you can use `Find Skills` to discover more later. Use `Skill Vetter` before adding any non-baseline skill.
-
 ## Local Configuration Notes
 
 - `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
 - `.openclaw/local.env` is the user-editable local override file; `.openclaw/state/runtime.env` is generated and should not be edited directly.
-- `.openclaw/skills` is the repo-local skill directory loaded into the containerized OpenClaw workspace.
 - `.openclaw/local.env` now stores `OPENCLAW_INSTANCE_ID` and `OPENCLAW_PORT_MANAGED` so repo instances can be tracked and reallocated safely.
 - `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` still live in `.openclaw/local.env` for the OpenClaw runtime, but `init`/`up` mirror them into Docker MCP secrets automatically.
 - `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
@@ -150,7 +137,6 @@ The rendered OpenClaw config loads `.openclaw/skills` automatically. Repo-specif
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
-- Workspace skill sync state is tracked in `.openclaw/state/skills-status.json`.
 - The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
 - Separate Telegram bot tokens are the supported concurrent multi-repo model. `up` now refuses to start two running repo instances with the same bot token.
 
@@ -168,11 +154,12 @@ npx openclaw-repo-agent mcp use
 
 What this does:
 
-- enables `docker`, `fetch`, `filesystem`, `github-official`, `playwright`, and `context7`
+- enables `docker`, `fetch`, `filesystem`, `github-official`, and `context7`
 - prepares `.openclaw/state/docker-mcp.config.yaml` for this repo
 - mirrors configured `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and optional `GITHUB_PERSONAL_ACCESS_TOKEN` into Docker MCP secrets
 - activates the repo's Docker MCP config only when you run `mcp use`
 - reconnects Codex to `docker mcp gateway run` when you run `mcp use`
+- uses Playwright CLI directly for browser automation instead of Docker MCP's Playwright server
 
 External pairing:
 
@@ -190,6 +177,7 @@ Notes:
 - `mcp connect` is kept as an alias to `mcp use` during migration
 - `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/local.env` and rerunning `init`, `up`, or `mcp setup`
 - `context7` is enabled permanently for version-specific documentation lookup
+- Playwright MCP is intentionally not enabled; use Playwright CLI directly when browser automation is needed
 - the repo-local Docker MCP config only scopes filesystem access for this repo; the other recommended servers do not need per-repo config
 - use `mcp setup` and `mcp use` as repair commands if the repo-local config or Codex connection gets out of sync
 

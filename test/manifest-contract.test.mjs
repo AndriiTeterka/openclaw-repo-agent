@@ -91,11 +91,9 @@ test("validateProjectManifest rejects unsupported ACP agents", () => {
   assert.match(errors.join("; "), /acp\.allowedAgents must contain only supported agents: codex, claude, gemini/);
 });
 
-test("buildOpenClawConfig loads repo-local workspace skills from .openclaw/skills", () => {
+test("buildOpenClawConfig no longer injects workspace skill directories", () => {
   const manifest = createManifest();
-  const { config } = buildOpenClawConfig(manifest, {
-    OPENCLAW_WORKSPACE_SKILLS_DIR: "/workspace/.openclaw/skills"
-  });
+  const { config } = buildOpenClawConfig(manifest);
 
-  assert.deepEqual(config.skills.load.extraDirs, ["/workspace/.openclaw/skills"]);
+  assert.equal(config.skills, undefined);
 });
