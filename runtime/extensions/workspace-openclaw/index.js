@@ -50,6 +50,7 @@ function buildSystemContext(config) {
     `Use ACP runtime via backend "acpx" with agentId "${preferredAcpAgent || "not set"}" for repository inspection, edits, and verification.`,
     `Prefer ACP mode "${preferredAcpMode}" unless the user explicitly asks for a different ACP mode.`,
     `Default inbound queue mode for this workspace is "${queueMode}".`,
+    "For browser automation in this workspace, use `playwright-cli` only. Do not use `npx playwright` or Playwright MCP.",
     `Telegram DM policy: ${telegramDmPolicy}; group policy: ${telegramGroupPolicy}; stream mode: ${telegramStreamMode}.`,
     telegramAllowFrom.length > 0 ? `Telegram DM allowlist entries: ${telegramAllowFrom.join(", ")}` : "",
     telegramGroupAllowFrom.length > 0 ? `Telegram group allowlist entries: ${telegramGroupAllowFrom.join(", ")}` : "",

@@ -24,15 +24,25 @@ const STATUS_META = {
 };
 
 const REPORT_TITLE_ALIASES = {
-  "Init complete": "Initialization completed",
-  "Up complete": "Up completed",
-  "Down complete": "Down completed",
-  "Update complete": "Update completed",
-  "Verification complete": "Verification completed",
-  "Pairing complete": "Pairing completed",
-  "MCP setup complete": "MCP setup completed",
-  "MCP use complete": "MCP use completed"
+  "Init complete": "'init' completed",
+  "Up complete": "'up' completed",
+  "Down complete": "'down' completed",
+  "Update complete": "'update' completed",
+  "Verification complete": "'verify' completed",
+  "Pairing complete": "'pair' completed",
+  "Pairing settings updated": "'pair' updated",
+  "MCP setup complete": "'mcp setup' completed",
+  "MCP use complete": "'mcp use' completed"
 };
+
+function resolveReportTitle(title, status = "info") {
+  const rawTitle = normalizeText(title);
+  const aliasedTitle = REPORT_TITLE_ALIASES[rawTitle] ?? rawTitle;
+  if (status === "info" && REPORT_TITLE_ALIASES[rawTitle]) {
+    return `${aliasedTitle} (no action required)`;
+  }
+  return aliasedTitle;
+}
 
 const SECTION_META = {
   Configuration: { icon: "⚙️", label: "CONFIGURATION" },
@@ -81,7 +91,7 @@ function colorizeStatus(text, status, options = {}) {
 }
 
 function colorizeAccent(text, options = {}) {
-  return resolvePaint(options).blueBright.bold(text);
+  return resolvePaint(options).cyanBright.bold(text);
 }
 
 function colorizeHeading(text, options = {}) {
@@ -98,16 +108,16 @@ function colorizeContent(text, options = {}) {
   if (!colorsEnabled(options)) return normalized;
 
   const paint = resolvePaint(options);
-  const codePattern = /`([^`]+)`/g;
+  const accentPattern = /(`[^`]+`|'[^']+')/g;
   const segments = [];
   let lastIndex = 0;
 
-  for (const match of normalized.matchAll(codePattern)) {
+  for (const match of normalized.matchAll(accentPattern)) {
     const index = match.index ?? 0;
     if (index > lastIndex) {
       segments.push(paint.white(normalized.slice(lastIndex, index)));
     }
-    segments.push(paint.blueBright.bold(match[0]));
+    segments.push(colorizeAccent(match[0], options));
     lastIndex = index + match[0].length;
   }
 
@@ -140,12 +150,18 @@ export function renderStatusMarker(status = "info", options = {}) {
 }
 
 function renderReportHeading(title, status = "info", options = {}) {
-  const normalizedTitle = REPORT_TITLE_ALIASES[normalizeText(title)] ?? normalizeText(title);
-  if (status === "success") {
+  const normalizedTitle = resolveReportTitle(title, status);
+  if (status === "success" || status === "error" || status === "info") {
     const paint = resolvePaint(options);
     const badge = colorsEnabled(options)
-      ? paint.bgGreenBright.black.bold(" SUCCESS ")
-      : "SUCCESS";
+      ? (status === "success"
+        ? paint.bgGreenBright.black.bold(" SUCCESS ")
+        : (status === "error"
+          ? paint.bgRedBright.whiteBright.bold(" FAIL ")
+          : paint.bgCyanBright.black.bold(" INFO ")))
+      : (status === "success"
+        ? "SUCCESS"
+        : (status === "error" ? "FAIL" : "INFO"));
     const titleText = colorsEnabled(options)
       ? paint.whiteBright(normalizedTitle)
       : normalizedTitle;
@@ -196,7 +212,7 @@ function renderRow(label, value, labelWidth = 0, options = {}) {
 
 function renderItemPrefix(status = "info", icon = "", options = {}) {
   if (!icon) return resolveStatusIcon(status, options);
-  if (icon === "»") {
+  if (icon === "›" || icon === "»") {
     return colorsEnabled(options) ? colorizeAccent(icon, options) : icon;
   }
   return colorizeStatus(icon, status, options);
@@ -272,6 +288,14 @@ export function renderReport(report, options = {}) {
   lines.push("");
   lines.push(renderReportHeading(title, report.status, options));
 
+  if (Array.isArray(report.body)) {
+    const bodyLines = report.body.flatMap((item) => renderItem(item, options, report.status).filter(Boolean));
+    if (bodyLines.length > 0) {
+      lines.push("");
+      lines.push(...bodyLines);
+    }
+  }
+
   if (report.summary?.length) {
     lines.push("");
     lines.push(...renderSection({
@@ -297,16 +321,12 @@ export function printReport(report, options = {}) {
 }
 
 export function printFatalError(message, options = {}) {
+  const title = normalizeText(options.title) || "command could not be completed";
   const output = renderReport({
     status: "error",
-    title: "Command failed",
-    summaryTitle: "Details",
-    sections: [
-      {
-        title: "Details",
-        status: "error",
-        items: [{ status: "error", text: normalizeText(message), icon: "✖" }]
-      }
+    title,
+    body: [
+      { status: "error", text: normalizeText(message), icon: "✖" }
     ]
   }, {
     ...options,

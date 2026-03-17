@@ -8,12 +8,16 @@ import { promisify } from "node:util";
 
 import {
   ACP_AGENT_CHOICES,
+  classifyTelegramBotProbeResult,
   collectInitPromptState,
   CODEX_AUTH_SOURCE_CHOICES,
   defaultCodexAuthSource,
+  describeCommandFromArgv,
   deriveComposeProjectName,
   hasGitignoreEntry,
+  looksLikeTelegramBotToken,
   promptChoice,
+  selectLatestPendingDeviceRequest,
   selectLatestPendingPairingRequest
 } from "../cli/src/cli.mjs";
 
@@ -111,7 +115,7 @@ test("major command handlers use the shared report renderer", async () => {
 
   assert.match(source, /printCommandReport\("success", "Init complete"/);
   assert.match(source, /printCommandReport\("success", "Up complete"/);
-  assert.match(source, /printCommandReport\(pairResult\.approved \? "success" : "warning", "Pairing complete"/);
+  assert.match(source, /printCommandReport\(pairResult\.approved \? "success" : "info", "Pairing complete"/);
   assert.match(source, /printCommandReport\("success", "Status"/);
   assert.match(source, /printCommandReport\(ok \? "success" : "warning", "Doctor"/);
   assert.match(source, /printCommandReport\("success", "Update complete"/);
@@ -123,6 +127,61 @@ test("up resolves and prints the authenticated dashboard URL", async () => {
   assert.match(source, /openclawGatewayCommand\(context, \["dashboard", "--no-open"\], \{ capture: true \}\)/);
   assert.match(source, /const dashboardUrl = await runWithSpinner\("Resolving dashboard URL", \(\) => resolveDashboardUrl\(context\), options\);/);
   assert.match(source, /printCommandReport\("success", "Up complete", \[\s*{ label: "Repo", value: context\.repoRoot },\s*{ label: "Dashboard", value: dashboardUrl }/s);
+});
+
+test("up no longer launches a background watcher for dashboard device requests", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.doesNotMatch(source, /spawnDashboardPairWatcher\(/);
+  assert.doesNotMatch(source, /watchDashboardPairing\(/);
+  assert.doesNotMatch(source, /INTERNAL_DASHBOARD_PAIR_WATCH_COMMAND/);
+});
+
+test("pair combines local gateway-device and Telegram pairing approvals", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.match(source, /pairResult = summarizePairTargets\("local", \[\s*await autoApproveLocalDevicePair\(context\),\s*await autoApproveLocalTelegramPair\(context\)\s*\]\);/s);
+  assert.match(source, /const devicePairResult = await approveLocalDevicePair\(context, options\.approve, \{ allowMissing: true \}\);/);
+  assert.match(source, /devicePairResult \|\| await approveLocalTelegramPair\(context, options\.approve\)/);
+});
+
+test("up validates the Telegram bot token before starting the stack", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+
+  assert.match(source, /runWithSpinner\("Validating Telegram bot token", \(\) => ensureTelegramBotTokenReady\(context, state\), options\)/);
+  assert.match(source, /runWithSpinner\("Starting OpenClaw stack", \(\) => dockerCompose\(context, buildComposeUpArgs\(state\.useLocalBuild\)\), options\)/);
+});
+
+test("down no longer prints repo and project summary lines", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+  const handleDownBlock = source.match(/async function handleDown\(context\) \{[\s\S]*?\n\}/);
+
+  assert.ok(handleDownBlock, "expected to find handleDown in cli source");
+  assert.match(handleDownBlock[0], /printCommandReport\("success", "Down complete", \[\s*{ label: "Instance", value: context\.instanceId },\s*{ label: "Compose", value: context\.composeProjectName },\s*{ label: "Result", value: "OpenClaw gateway stopped" }\s*\]\);/s);
+  assert.doesNotMatch(handleDownBlock[0], /{ label: "Repo", value: context\.repoRoot }/);
+  assert.doesNotMatch(handleDownBlock[0], /{ label: "Project", value: state\.manifest\.projectName }/);
+});
+
+test("pair completion report no longer prints repo, mode, or gateway summary lines", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+  const handlePairBlock = source.match(/async function handlePair\(context, options\) \{[\s\S]*?\n\}/);
+
+  assert.ok(handlePairBlock, "expected to find handlePair in cli source");
+  assert.match(handlePairBlock[0], /printCommandReport\(pairResult\.approved \? "success" : "info", "Pairing complete", \[\s*{ label: "Action", value: pairResult\.action },\s*{ label: "Request", value: pairResult\.requestCode \|\| "\(latest or none\)" },\s*{ label: "Result", value: pairResult\.detail }\s*\], \[\s*buildPairDetailsSection\(pairResult\.targets\)\s*\]\.filter\(Boolean\)\);/s);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \? "success" : "info", "Pairing complete", \[[\s\S]*{ label: "Repo", value: context\.repoRoot }/);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \? "success" : "info", "Pairing complete", \[[\s\S]*{ label: "Mode", value: pairResult\.mode }/);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \? "success" : "info", "Pairing complete", \[[\s\S]*{ label: "Gateway"/);
+});
+
+test("pair settings update report drops repo, mode, and gateway summary lines", async () => {
+  const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
+  const handlePairBlock = source.match(/async function handlePair\(context, options\) \{[\s\S]*?\n\}/);
+
+  assert.ok(handlePairBlock, "expected to find handlePair in cli source");
+  assert.match(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[\s*{ label: "Action", value: pairResult\.action },\s*{ label: "Request", value: pairResult\.requestCode \|\| "\(latest or none\)" },\s*{ label: "Allowlists", value: "updated" },\s*{ label: "DM policy", value: localEnv\.OPENCLAW_TELEGRAM_DM_POLICY },\s*{ label: "Group policy", value: localEnv\.OPENCLAW_TELEGRAM_GROUP_POLICY }\s*\], \[\s*buildPairDetailsSection\(pairResult\.targets\)\s*\]\.filter\(Boolean\)\);/s);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Repo", value: context\.repoRoot }/);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Mode", value: pairResult\.mode }/);
+  assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Gateway"/);
 });
 
 test("version flag prints product version", async () => {
@@ -151,6 +210,29 @@ test("defaultCodexAuthSource prefers detected auth folders over API keys", () =>
   assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, "C:/Users/demo/.codex"), "auth-folder");
   assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, ""), "api-key");
   assert.equal(defaultCodexAuthSource({}, {}, ""), "auth-folder");
+});
+
+test("looksLikeTelegramBotToken accepts Telegram-style bot tokens", () => {
+  assert.equal(looksLikeTelegramBotToken("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"), true);
+  assert.equal(looksLikeTelegramBotToken("replace-with-your-botfather-token"), false);
+  assert.equal(looksLikeTelegramBotToken("not-a-bot-token"), false);
+});
+
+test("classifyTelegramBotProbeResult treats Telegram 404s as definitive token failures", () => {
+  assert.deepEqual(
+    classifyTelegramBotProbeResult(404, { ok: false, description: "Not Found" }),
+    { ok: false, definitiveFailure: true, detail: "Not Found" }
+  );
+  assert.deepEqual(
+    classifyTelegramBotProbeResult(200, { ok: true, result: { username: "demo_bot" } }),
+    { ok: true, definitiveFailure: false, detail: "" }
+  );
+});
+
+test("describeCommandFromArgv keeps the command label while skipping global option values", () => {
+  assert.equal(describeCommandFromArgv(["--repo-root", "C:\\demo", "config", "validate", "--product-root=."]), "config validate");
+  assert.equal(describeCommandFromArgv(["up", "--json"]), "up");
+  assert.equal(describeCommandFromArgv(["--version"]), "");
 });
 
 test("promptChoice accepts default and numeric input", async () => {
@@ -328,6 +410,20 @@ test("config validation rejects unsupported ACP agents from CLI flags", async ()
   );
 });
 
+test("fatal command failures reuse the success-style heading with the command name", async () => {
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, "up", "--definitely-bad-option"], {
+      cwd: repoRoot
+    }),
+    (error) => {
+      assert.match(error.stderr, /FAIL\s+'up' could not be completed/i);
+      assert.match(error.stderr, /Unknown option: --definitely-bad-option/i);
+      assert.doesNotMatch(error.stderr, /📄\s+DETAILS/);
+      return true;
+    }
+  );
+});
+
 test("deriveComposeProjectName uses the repo identity and prefix", () => {
   assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\appium-test-project"), /^openclaw-appium-test-project-[a-f0-9]{8}$/);
   assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\Repo With Spaces"), /^openclaw-repo-with-spaces-[a-f0-9]{8}$/);
@@ -342,6 +438,18 @@ test("selectLatestPendingPairingRequest chooses the newest request from common p
   });
 
   assert.equal(request?.code, "NEWEST99");
+});
+
+test("selectLatestPendingDeviceRequest returns the newest pending device request", () => {
+  const selected = selectLatestPendingDeviceRequest({
+    pending: [
+      { requestId: "older", ts: 1000 },
+      { requestId: "newest", ts: 4000 },
+      { requestId: "middle", ts: 3000 }
+    ]
+  });
+
+  assert.equal(selected?.requestId, "newest");
 });
 
 test("example consumer repo ignores the full .openclaw directory", async () => {

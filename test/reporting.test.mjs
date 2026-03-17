@@ -44,13 +44,13 @@ test("renderReport formats section-based output without ANSI when color is disab
       {
         title: "Next steps",
         items: [
-          { status: "info", icon: "»", text: "Run `openclaw-repo-agent up` next." }
+          { status: "info", icon: "›", text: "Run 'openclaw-repo-agent up' next." }
         ]
       }
     ]
   }, { color: false });
 
-  assert.match(output, /SUCCESS  Initialization completed/);
+  assert.match(output, /SUCCESS  'init' completed/);
   assert.match(output, /⚙️\s+CONFIGURATION/);
   assert.match(output, /Repo:\s+C:\/demo\/repo/);
   assert.match(output, /📁\s+FILES CREATED/);
@@ -63,26 +63,62 @@ test("renderReport formats section-based output without ANSI when color is disab
   assert.match(output, /✔ Docker MCP: Synced Telegram bot token/);
   assert.match(output, /⚠️\s+WARNINGS/);
   assert.match(output, /➡️\s+TO DO NEXT/);
-  assert.match(output, /» Run `openclaw-repo-agent up` next\./);
-  assert.match(output, /Run `openclaw-repo-agent up` next\./);
+  assert.match(output, /› Run 'openclaw-repo-agent up' next\./);
+  assert.match(output, /Run 'openclaw-repo-agent up' next\./);
   assert.doesNotMatch(output, /\u001b\[/);
+});
+
+test("renderReport formats fatal-style error headings with the same badge layout as success", () => {
+  const output = renderReport({
+    status: "error",
+    title: "'up' could not be completed",
+    body: [
+      { status: "error", text: "Run `openclaw-repo-agent up` after fixing Unsupported acp.defaultAgent: opencode.", icon: "✖" }
+    ]
+  }, { color: false });
+
+  assert.match(output, /FAIL  'up' could not be completed/);
+  assert.doesNotMatch(output, /COMMAND FAILED/);
+  assert.doesNotMatch(output, /📄\s+DETAILS/);
+  assert.match(output, /[✖×] Run `openclaw-repo-agent up` after fixing Unsupported acp\.defaultAgent: opencode\./);
+  assert.match(output, /openclaw-repo-agent up/);
+});
+
+test("renderReport aliases pair settings updates to the command-style success heading", () => {
+  const output = renderReport({
+    status: "success",
+    title: "Pairing settings updated",
+    summary: [
+      { label: "Action", value: "approved" }
+    ]
+  }, { color: false });
+
+  assert.match(output, /SUCCESS  'pair' updated/);
+});
+
+test("renderReport uses the info badge and no-action suffix for aliased command titles", () => {
+  const output = renderReport({
+    status: "info",
+    title: "Pairing complete",
+    summary: [
+      { label: "Action", value: "listed" }
+    ]
+  }, { color: false });
+
+  assert.match(output, /INFO  'pair' completed \(no action required\)/);
 });
 
 test("renderReport emits ANSI colors when enabled", () => {
   const output = renderReport({
     status: "error",
-    title: "Command failed",
-    sections: [
-      {
-        title: "Details",
-        status: "error",
-        items: ["Run `openclaw-repo-agent up` after fixing Unsupported acp.defaultAgent: opencode."]
-      }
+    title: "'up' could not be completed",
+    body: [
+      { status: "error", text: "Run `openclaw-repo-agent up` after fixing Unsupported acp.defaultAgent: opencode.", icon: "✖" }
     ]
   }, { color: true });
 
   assert.match(output, /\u001b\[/);
-  assert.match(output, /COMMAND FAILED/);
-  assert.match(output, /[✖×]/);
+  assert.match(output, /FAIL/);
+  assert.match(output, /'up' could not be completed/);
   assert.match(output, /openclaw-repo-agent up/);
 });

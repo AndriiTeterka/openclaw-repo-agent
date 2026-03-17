@@ -52,10 +52,39 @@ test("runtime Dockerfile installs the Codex CLI", async () => {
   assert.match(dockerfile, /npm install --global @openai\/codex/);
 });
 
+test("runtime Dockerfile preinstalls Playwright CLI, Chromium, and browser dependencies", async () => {
+  const dockerfile = await fs.readFile(path.resolve("runtime/Dockerfile"), "utf8");
+
+  assert.match(dockerfile, /ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright/);
+  assert.match(dockerfile, /npm install --global @openai\/codex @playwright\/cli/);
+  assert.match(dockerfile, /@playwright\/cli\/node_modules\/\.bin\/playwright"\ install --with-deps chromium/);
+  assert.match(dockerfile, /mkdir -p \/home\/node\/\.openclaw \/ms-playwright/);
+  assert.match(dockerfile, /COPY runtime\/playwright-cli\.config\.json \/app\/\.playwright\/cli\.config\.json/);
+  assert.match(dockerfile, /COPY runtime\/playwright-cli-wrapper\.mjs \/usr\/local\/bin\/playwright-cli/);
+  assert.match(dockerfile, /COPY runtime\/playwright-shim\.sh \/usr\/local\/bin\/playwright/);
+});
+
 test("runtime Dockerfile copies manifest-contract runtime dependencies", async () => {
   const dockerfile = await fs.readFile(path.resolve("runtime/Dockerfile"), "utf8");
 
   assert.match(dockerfile, /COPY runtime\/shared\.mjs \/opt\/openclaw\/shared\.mjs/);
   assert.match(dockerfile, /COPY runtime\/supported-acp-agents\.mjs \/opt\/openclaw\/supported-acp-agents\.mjs/);
   assert.match(dockerfile, /COPY runtime\/manifest-contract\.mjs \/opt\/openclaw\/manifest-contract\.mjs/);
+});
+
+test("runtime entrypoint removes stale npx playwright caches", async () => {
+  const entrypoint = await fs.readFile(path.resolve("runtime/entrypoint.sh"), "utf8");
+
+  assert.match(entrypoint, /cleanup_stale_playwright_installs/);
+  assert.match(entrypoint, /\.npm\/_npx/);
+  assert.match(entrypoint, /\.cache\/ms-playwright/);
+});
+
+test("runtime playwright shim routes bare playwright invocations to playwright-cli", async () => {
+  const shim = await fs.readFile(path.resolve("runtime/playwright-shim.sh"), "utf8");
+  const wrapper = await fs.readFile(path.resolve("runtime/playwright-cli-wrapper.mjs"), "utf8");
+
+  assert.match(shim, /exec \/usr\/local\/bin\/playwright-cli "\$@"/);
+  assert.match(wrapper, /firstCommand\(argv\) !== "open"/);
+  assert.match(wrapper, /"--config", defaultConfig/);
 });

@@ -441,6 +441,40 @@ function summarizeOpenClawHealthPayload(payload) {
   return `Gateway health RPC failed${detail ? ` (${detail})` : ""}.`;
 }
 
+function isPlaceholderTelegramBotToken(value) {
+  return String(value ?? "").trim().startsWith("replace-with-");
+}
+
+function hasConfiguredTelegramBotToken(value) {
+  const token = String(value ?? "").trim();
+  return Boolean(token) && !isPlaceholderTelegramBotToken(token);
+}
+
+export function looksLikeTelegramBotToken(value) {
+  return /^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(String(value ?? "").trim());
+}
+
+export function classifyTelegramBotProbeResult(statusCode, payload = null) {
+  const description = String(payload?.description ?? "").trim();
+  if (statusCode === 200 && payload?.ok === true) {
+    return {
+      ok: true,
+      definitiveFailure: false,
+      detail: description
+    };
+  }
+
+  const definitiveFailure = statusCode === 401
+    || statusCode === 404
+    || (payload?.ok === false && /unauthorized|not found|invalid|wrong token|bot token/i.test(description));
+
+  return {
+    ok: false,
+    definitiveFailure,
+    detail: description || (statusCode > 0 ? `HTTP ${statusCode}` : "")
+  };
+}
+
 function compareVersions(left, right) {
   const leftParts = String(left ?? "").replace(/^v/i, "").split(".").map((value) => Number.parseInt(value, 10) || 0);
   const rightParts = String(right ?? "").replace(/^v/i, "").split(".").map((value) => Number.parseInt(value, 10) || 0);
@@ -540,6 +574,48 @@ function parseArguments(argv) {
     positionals,
     options
   };
+}
+
+export function describeCommandFromArgv(argv = []) {
+  const positionals = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = String(argv[index] ?? "");
+    if (!token || token === "-h" || token === "--help" || token === "-v" || token === "--version") {
+      continue;
+    }
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+
+    const option = token.slice(2);
+    const separatorIndex = option.indexOf("=");
+    const key = separatorIndex >= 0 ? option.slice(0, separatorIndex) : option;
+    const inlineValue = separatorIndex >= 0 ? option.slice(separatorIndex + 1) : null;
+
+    if (BOOLEAN_FLAGS.has(key)) {
+      if (inlineValue == null) {
+        const next = argv[index + 1];
+        if (next && !next.startsWith("--") && next !== "-h" && next !== "-v" && isBooleanLike(next)) {
+          index += 1;
+        }
+      }
+      continue;
+    }
+
+    if ((ARRAY_FLAGS.has(key) || STRING_FLAGS.has(key)) && inlineValue == null) {
+      const next = argv[index + 1];
+      if (next && !next.startsWith("--") && next !== "-h" && next !== "-v") {
+        index += 1;
+      }
+    }
+  }
+
+  if (positionals.length === 0) return "";
+  if (["config", "instances", "mcp"].includes(positionals[0]) && positionals[1]) {
+    return `${positionals[0]} ${positionals[1]}`;
+  }
+  return positionals[0];
 }
 
 function toCamelCase(value) {
@@ -1118,7 +1194,10 @@ async function dockerCompose(context, args, options = {}) {
     context.paths.runtimeEnvFile,
     ...args
   ];
-  const result = await safeRunCommand("docker", commandArgs, { cwd: context.repoRoot });
+  const result = await safeRunCommand("docker", commandArgs, {
+    cwd: context.repoRoot,
+    timeoutMs: options.timeoutMs
+  });
   if (options.capture) return result;
   if (result.code !== 0) {
     throw new Error(summarizeCommandFailure(
@@ -1164,6 +1243,79 @@ async function openclawHostCommand(context, args, options = {}) {
 
 async function openclawGatewayCommand(context, args, options = {}) {
   return await dockerCompose(context, ["exec", "-T", "openclaw-gateway", "openclaw", ...args], options);
+}
+
+function normalizePendingDeviceRequests(payload) {
+  const pending = Array.isArray(payload?.pending) ? payload.pending : [];
+  return pending
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      requestId: String(entry.requestId ?? entry.request_id ?? "").trim(),
+      clientId: String(entry.clientId ?? entry.client_id ?? "").trim(),
+      clientMode: String(entry.clientMode ?? entry.client_mode ?? "").trim(),
+      role: String(entry.role ?? "").trim(),
+      ts: Number.isFinite(Number(entry.ts)) ? Number(entry.ts) : 0
+    }))
+    .filter((entry) => entry.requestId);
+}
+
+export function selectLatestPendingDeviceRequest(payload) {
+  const requests = normalizePendingDeviceRequests(payload);
+  if (requests.length === 0) return null;
+  return requests.reduce((latest, current) => current.ts >= latest.ts ? current : latest);
+}
+
+async function probeTelegramBotToken(token) {
+  return await new Promise((resolve) => {
+    const request = https.get(`https://api.telegram.org/bot${token}/getMe`, {
+      timeout: 5000
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        const payload = parseJsonOutput(body, null);
+        resolve({
+          statusCode: response.statusCode ?? 0,
+          payload,
+          ...classifyTelegramBotProbeResult(response.statusCode ?? 0, payload)
+        });
+      });
+    });
+
+    request.on("timeout", () => {
+      request.destroy(new Error("Telegram Bot API probe timed out."));
+    });
+
+    request.on("error", (error) => {
+      resolve({
+        statusCode: 0,
+        payload: null,
+        ok: false,
+        definitiveFailure: false,
+        detail: error.message
+      });
+    });
+  });
+}
+
+async function ensureTelegramBotTokenReady(context, state) {
+  if (!state.manifest.telegram.enabled) return;
+
+  const token = String(state.localEnv.TELEGRAM_BOT_TOKEN ?? "").trim();
+  if (!hasConfiguredTelegramBotToken(token)) {
+    throw new Error(`Telegram bot token is missing. Set TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+  }
+  if (!looksLikeTelegramBotToken(token)) {
+    throw new Error(`Telegram bot token format looks invalid. Update TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+  }
+
+  const probe = await probeTelegramBotToken(token);
+  if (probe.definitiveFailure) {
+    throw new Error(`Telegram bot token was rejected by the Telegram Bot API${probe.detail ? ` (${probe.detail})` : ""}. Update TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+  }
 }
 
 function extractDashboardUrl(output) {
@@ -1491,13 +1643,13 @@ function buildNextStepsSection(items) {
     if (typeof item === "string") {
       return {
         status: "info",
-        icon: "»",
+        icon: "›",
         text: item
       };
     }
     return {
       status: item?.status || "info",
-      icon: item?.icon || "»",
+      icon: item?.icon || "›",
       text: item?.text || ""
     };
   }));
@@ -1930,7 +2082,7 @@ async function handleInit(context, options) {
       ? [`This Telegram bot token is also configured in ${registeredConflicts.length} other registered repo instance(s).`]
       : []),
     buildNextStepsSection([
-      `Run \`${PRODUCT_NAME} up\` to start the OpenClaw gateway for this repo.`
+      `Run '${PRODUCT_NAME} up' to start the OpenClaw gateway for this repo.`
     ])
   ].filter(Boolean), {
     summaryTitle: "Configuration"
@@ -2018,6 +2170,7 @@ async function handleUp(context, options) {
       .join(", ");
     throw new Error(`Telegram bot token is already in use by another running repo instance: ${details}. Use a separate bot token per repo.`);
   }
+  await runWithSpinner("Validating Telegram bot token", () => ensureTelegramBotTokenReady(context, state), options);
   if (state.useLocalBuild) {
     await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
   }
@@ -2047,11 +2200,9 @@ async function handleUp(context, options) {
 }
 
 async function handleDown(context) {
-  const state = await prepareState(context);
+  await prepareState(context);
   await dockerCompose(context, ["down"]);
   printCommandReport("success", "Down complete", [
-    { label: "Repo", value: context.repoRoot },
-    { label: "Project", value: state.manifest.projectName },
     { label: "Instance", value: context.instanceId },
     { label: "Compose", value: context.composeProjectName },
     { label: "Result", value: "OpenClaw gateway stopped" }
@@ -2082,6 +2233,127 @@ async function handleVerify(context, options) {
   ].filter(Boolean));
 }
 
+function createPairTargetResult(target, action, approved, requestCode, detail) {
+  return {
+    target,
+    action,
+    approved,
+    requestCode,
+    detail
+  };
+}
+
+function pairTargetLabel(target) {
+  switch (target) {
+    case "gateway-device":
+      return "Gateway device";
+    case "telegram":
+      return "Telegram DM";
+    case "external-device":
+      return "External device";
+    default:
+      return capitalizeSentence(String(target ?? "").replace(/-/g, " "));
+  }
+}
+
+function summarizePairTargets(mode, targets = []) {
+  const normalizedTargets = targets.filter(Boolean);
+  const approvedCount = normalizedTargets.filter((target) => target.approved).length;
+  const requestCodes = normalizedTargets.map((target) => target.requestCode).filter(Boolean);
+
+  return {
+    mode,
+    action: approvedCount === 0
+      ? "listed"
+      : normalizedTargets.some((target) => target.action === "approved")
+        ? `approved ${approvedCount} request${approvedCount === 1 ? "" : "s"}`
+        : `auto-approved ${approvedCount} request${approvedCount === 1 ? "" : "s"}`,
+    approved: approvedCount > 0,
+    requestCode: requestCodes.join(", "),
+    detail: approvedCount > 0
+      ? `Approved ${approvedCount} pending pairing request${approvedCount === 1 ? "" : "s"}.`
+      : "No pending pairing request was approved.",
+    targets: normalizedTargets
+  };
+}
+
+function buildPairDetailsSection(targets = []) {
+  return buildStatusSection("Details", "info", targets.map((target) => `${pairTargetLabel(target.target)}: ${target.detail}`));
+}
+
+function isUnknownLocalPairRequest(result) {
+  const message = `${result?.stderr ?? ""}\n${result?.stdout ?? ""}`;
+  return /unknown requestid|not found|no pending|invalid request/i.test(message);
+}
+
+async function approveLocalDevicePair(context, requestId, options = {}) {
+  const approveResult = await openclawGatewayCommand(context, ["devices", "approve", requestId], { capture: true });
+  if (approveResult.code !== 0) {
+    if (options.allowMissing && isUnknownLocalPairRequest(approveResult)) return null;
+    throw new Error(summarizeCommandFailure(
+      "openclaw devices approve",
+      approveResult,
+      `Failed to approve local gateway device pairing request ${requestId}.`
+    ));
+  }
+
+  return createPairTargetResult(
+    "gateway-device",
+    "approved",
+    true,
+    requestId,
+    `Approved gateway device pairing request ${requestId}.`
+  );
+}
+
+async function autoApproveLocalDevicePair(context) {
+  const pendingResult = await openclawGatewayCommand(context, ["devices", "list", "--json"], { capture: true });
+  if (pendingResult.code !== 0) {
+    throw new Error(summarizeCommandFailure(
+      "openclaw devices list",
+      pendingResult,
+      "Failed to read gateway device pairing requests."
+    ));
+  }
+
+  const request = selectLatestPendingDeviceRequest(parseJsonOutput(pendingResult.stdout, null));
+  if (!request?.requestId) {
+    return createPairTargetResult(
+      "gateway-device",
+      "listed",
+      false,
+      "",
+      "No pending gateway device pairing request was found."
+    );
+  }
+
+  const approved = await approveLocalDevicePair(context, request.requestId);
+  return {
+    ...approved,
+    action: "auto-approved"
+  };
+}
+
+async function approveLocalTelegramPair(context, requestCode, options = {}) {
+  const approveResult = await openclawGatewayCommand(context, ["pairing", "approve", "telegram", requestCode], { capture: true });
+  if (approveResult.code !== 0) {
+    if (options.allowMissing && isUnknownLocalPairRequest(approveResult)) return null;
+    throw new Error(summarizeCommandFailure(
+      "openclaw pairing approve telegram",
+      approveResult,
+      `Failed to approve local Telegram pairing request ${requestCode}.`
+    ));
+  }
+
+  return createPairTargetResult(
+    "telegram",
+    "approved",
+    true,
+    requestCode,
+    `Approved Telegram pairing request ${requestCode}.`
+  );
+}
+
 async function autoApproveLocalTelegramPair(context) {
   const pendingResult = await openclawGatewayCommand(context, ["pairing", "list", "telegram", "--json"], { capture: true });
   if (pendingResult.code !== 0) {
@@ -2101,22 +2373,19 @@ async function autoApproveLocalTelegramPair(context) {
 
   const request = selectLatestPendingPairingRequest(payload);
   if (!request?.code) {
-    return {
-      mode: "local",
-      action: "listed",
-      approved: false,
-      requestCode: "",
-      detail: "No pending Telegram pairing request was found."
-    };
+    return createPairTargetResult(
+      "telegram",
+      "listed",
+      false,
+      "",
+      "No pending Telegram pairing request was found."
+    );
   }
 
-  await openclawGatewayCommand(context, ["pairing", "approve", "telegram", request.code]);
+  const approved = await approveLocalTelegramPair(context, request.code);
   return {
-    mode: "local",
-    action: "auto-approved",
-    approved: true,
-    requestCode: request.code,
-    detail: `Approved Telegram pairing request ${request.code}.`
+    ...approved,
+    action: "auto-approved"
   };
 }
 
@@ -2124,35 +2393,35 @@ async function handleExternalGatewayPair(context, options) {
   const gatewayArgs = buildExternalGatewayAuthArgs(options);
   if (options.approve) {
     await openclawHostCommand(context, ["devices", "approve", options.approve, ...gatewayArgs]);
-    return {
-      mode: "external",
-      action: "approved",
-      approved: true,
-      requestCode: options.approve,
-      detail: `Approved external device pairing request ${options.approve}.`
-    };
+    return createPairTargetResult(
+      "external-device",
+      "approved",
+      true,
+      options.approve,
+      `Approved external device pairing request ${options.approve}.`
+    );
   }
 
   const approveLatest = await openclawHostCommand(context, ["devices", "approve", "--latest", ...gatewayArgs], { capture: true });
   if (approveLatest.code === 0) {
-    return {
-      mode: "external",
-      action: "auto-approved",
-      approved: true,
-      requestCode: "",
-      detail: "Approved the latest pending external device pairing request."
-    };
+    return createPairTargetResult(
+      "external-device",
+      "auto-approved",
+      true,
+      "",
+      "Approved the latest pending external device pairing request."
+    );
   }
 
   const list = await openclawHostCommand(context, ["devices", "list", ...(options.json ? ["--json"] : []), ...gatewayArgs], { capture: true });
   if (list.code === 0) {
-    return {
-      mode: "external",
-      action: "listed",
-      approved: false,
-      requestCode: "",
-      detail: "No external device pairing request was auto-approved."
-    };
+    return createPairTargetResult(
+      "external-device",
+      "listed",
+      false,
+      "",
+      "No external device pairing request was auto-approved."
+    );
   }
 
   const reason = summarizeCommandFailure(
@@ -2170,32 +2439,25 @@ async function handlePair(context, options) {
   validateExternalGatewayPairOptions(options);
   await prepareState(context, options);
   const localEnv = await readEnvFile(context.paths.localEnvFile);
-  let pairResult = {
-    mode: isExternalGatewayPairMode(options) ? "external" : "local",
-    action: "none",
-    approved: false,
-    requestCode: "",
-    detail: ""
-  };
+  let pairResult = summarizePairTargets(isExternalGatewayPairMode(options) ? "external" : "local", []);
 
   if (isExternalGatewayPairMode(options)) {
-    pairResult = await handleExternalGatewayPair(context, options);
+    pairResult = summarizePairTargets("external", [await handleExternalGatewayPair(context, options)]);
   } else {
     if (!(await gatewayRunning(context))) {
       throw new Error("OpenClaw gateway is not running. Start it with openclaw-repo-agent up first.");
     }
 
     if (options.approve) {
-      await openclawGatewayCommand(context, ["pairing", "approve", "telegram", options.approve]);
-      pairResult = {
-        mode: "local",
-        action: "approved",
-        approved: true,
-        requestCode: options.approve,
-        detail: `Approved Telegram pairing request ${options.approve}.`
-      };
+      const devicePairResult = await approveLocalDevicePair(context, options.approve, { allowMissing: true });
+      pairResult = summarizePairTargets("local", [
+        devicePairResult || await approveLocalTelegramPair(context, options.approve)
+      ]);
     } else {
-      pairResult = await autoApproveLocalTelegramPair(context);
+      pairResult = summarizePairTargets("local", [
+        await autoApproveLocalDevicePair(context),
+        await autoApproveLocalTelegramPair(context)
+      ]);
     }
   }
 
@@ -2203,27 +2465,35 @@ async function handlePair(context, options) {
     && (options.groupAllowUser?.length ?? 0) === 0
     && !options.switchDmPolicy
     && !options.switchGroupPolicy) {
-    printCommandReport(pairResult.approved ? "success" : "warning", "Pairing complete", [
-      { label: "Repo", value: context.repoRoot },
-      { label: "Mode", value: pairResult.mode },
+    printCommandReport(pairResult.approved ? "success" : "info", "Pairing complete", [
       { label: "Action", value: pairResult.action },
       { label: "Request", value: pairResult.requestCode || "(latest or none)" },
-      { label: "Gateway", value: isExternalGatewayPairMode(options) ? (options.gatewayUrl || "(external)") : buildDashboardUrl(localEnv.OPENCLAW_GATEWAY_PORT) },
-      { label: "Result", value: pairResult.detail || (pairResult.approved ? "Pairing approved." : "No pending request was approved.") }
-    ]);
+      { label: "Result", value: pairResult.detail }
+    ], [
+      buildPairDetailsSection(pairResult.targets)
+    ].filter(Boolean));
     return;
   }
 
-  localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM = JSON.stringify(normalizePrincipalArray([
+  const nextAllowFrom = JSON.stringify(normalizePrincipalArray([
     ...parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []),
     ...(options.allowUser ?? [])
   ]));
-  localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM = JSON.stringify(normalizePrincipalArray([
+  const nextGroupAllowFrom = JSON.stringify(normalizePrincipalArray([
     ...parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []),
     ...(options.groupAllowUser ?? [])
   ]));
-  if (options.switchDmPolicy) localEnv.OPENCLAW_TELEGRAM_DM_POLICY = options.switchDmPolicy;
-  if (options.switchGroupPolicy) localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY = options.switchGroupPolicy;
+  const nextDmPolicy = options.switchDmPolicy || localEnv.OPENCLAW_TELEGRAM_DM_POLICY;
+  const nextGroupPolicy = options.switchGroupPolicy || localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY;
+  const settingsChanged = nextAllowFrom !== localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM
+    || nextGroupAllowFrom !== localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM
+    || nextDmPolicy !== localEnv.OPENCLAW_TELEGRAM_DM_POLICY
+    || nextGroupPolicy !== localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY;
+
+  localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM = nextAllowFrom;
+  localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM = nextGroupAllowFrom;
+  localEnv.OPENCLAW_TELEGRAM_DM_POLICY = nextDmPolicy;
+  localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY = nextGroupPolicy;
 
   const plugin = normalizePluginConfig(await readJsonFile(context.paths.pluginFile, {}), context.repoRoot, context.detection, options);
   await writeEnvFile(
@@ -2236,16 +2506,15 @@ async function handlePair(context, options) {
   );
   await prepareState(context, options);
   await rerenderIfRunning(context);
-  printCommandReport("success", "Pairing settings updated", [
-    { label: "Repo", value: context.repoRoot },
-    { label: "Mode", value: pairResult.mode },
+  printCommandReport(pairResult.approved || settingsChanged ? "success" : "info", "Pairing settings updated", [
     { label: "Action", value: pairResult.action },
     { label: "Request", value: pairResult.requestCode || "(latest or none)" },
-    { label: "Gateway", value: isExternalGatewayPairMode(options) ? (options.gatewayUrl || "(external)") : buildDashboardUrl(localEnv.OPENCLAW_GATEWAY_PORT) },
     { label: "Allowlists", value: "updated" },
     { label: "DM policy", value: localEnv.OPENCLAW_TELEGRAM_DM_POLICY },
     { label: "Group policy", value: localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY }
-  ]);
+  ], [
+    buildPairDetailsSection(pairResult.targets)
+  ].filter(Boolean));
 }
 
 async function checkLatestPackageVersion(packageName) {
@@ -2434,9 +2703,9 @@ async function handleDoctor(context, options) {
   pushCheck(
     results,
     "telegram-token",
-    Boolean(telegramToken) && !telegramToken.startsWith("replace-with-"),
-    Boolean(telegramToken) && !telegramToken.startsWith("replace-with-") ? "Telegram bot token is configured." : "Telegram bot token is missing.",
-    Boolean(telegramToken) && !telegramToken.startsWith("replace-with-") ? "" : `Set TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`
+    hasConfiguredTelegramBotToken(telegramToken),
+    hasConfiguredTelegramBotToken(telegramToken) ? "Telegram bot token is configured." : "Telegram bot token is missing.",
+    hasConfiguredTelegramBotToken(telegramToken) ? "" : `Set TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`
   );
 
   const authPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim();
@@ -2668,7 +2937,7 @@ async function handleMcpSetup(context, options) {
     buildStatusSection("Notes", "info", [
       payload.actions.length > 0 ? `Docker MCP: ${payload.actions.join(", ")}` : "Docker MCP: ready",
       "GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/local.env.",
-      "Use Playwright CLI directly for browser automation; Playwright MCP is not enabled.",
+      "Use Playwright CLI directly for browser automation; Playwright MCP is not enabled and `npx playwright` should not be used in this repo.",
       payload.nextStep
     ])
   ].filter(Boolean));
@@ -2822,7 +3091,7 @@ Commands:
   init             Initialize or refresh .openclaw files in a repository
   up               Start the local OpenClaw stack
   down             Stop the local OpenClaw stack
-  pair             Auto-approve local Telegram pairing or external device pairing
+  pair             Approve local gateway/device and Telegram pairing, or external device pairing
   doctor           Check local prerequisites and gateway health
   verify           Run configured verification commands in the gateway
   status           Show rendered manifest and runtime status

@@ -6,6 +6,22 @@ prepare_runtime_directories() {
   chmod 700 /home/node/.openclaw /home/node/.openclaw/runtime 2>/dev/null || true
 }
 
+cleanup_stale_playwright_installs() {
+  home_dir="${HOME:-/home/node}"
+  npx_root="$home_dir/.npm/_npx"
+
+  if [ -d "$npx_root" ]; then
+    find "$npx_root" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r dir; do
+      package_json="$dir/package.json"
+      if [ -f "$package_json" ] && grep -q '"playwright"' "$package_json"; then
+        rm -rf "$dir"
+      fi
+    done
+  fi
+
+  rm -rf "$home_dir/.cache/ms-playwright"
+}
+
 export_optional_java_home() {
   if [ -z "${JAVA_HOME:-}" ] && [ -d /usr/lib/jvm/java-17-openjdk-amd64 ]; then
     export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -35,6 +51,7 @@ render_openclaw_config() {
 
 run_bootstrap() {
   prepare_runtime_directories
+  cleanup_stale_playwright_installs
   export_optional_java_home
   bootstrap_provider_auth
   render_openclaw_config

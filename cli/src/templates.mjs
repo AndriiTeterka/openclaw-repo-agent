@@ -7,6 +7,7 @@ export function defaultInstructionsTemplate(projectName) {
 - This workspace is managed by \`openclaw-repo-agent\`.
 - Use the repo's configured ACP default agent when ACP-backed inspection, edits, or verification are needed.
 - Use Playwright CLI directly for browser automation instead of Docker MCP Playwright integration.
+- Never use \`npx playwright\` in this workspace; use \`playwright-cli\` or the bundled Playwright CLI wrapper.
 - Keep replies concise in Telegram-style channels and use the configured verification commands after relevant code changes.
 - Treat standalone cancellation messages such as \`stop\`, \`cancel\`, or \`dont fix\` as cancellation at the next tool boundary.
 - \`.openclaw/\` is git-ignored by default; do not commit local-only OpenClaw state or secrets unless you intentionally unignore selected files.
@@ -97,7 +98,7 @@ export function renderDockerMcpConfigTemplate(repoRoot) {
 # - github-official
 # - context7
 #
-# Browser automation should use Playwright CLI directly. Only filesystem needs per-repo config.
+# Browser automation should use Playwright CLI directly. Do not use \`npx playwright\`; use \`playwright-cli\` instead.
 # GitHub auth is handled by Docker MCP secrets/OAuth.
 
 filesystem:

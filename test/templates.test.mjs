@@ -18,6 +18,7 @@ test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", 
   assert.match(output, /github-official/);
   assert.match(output, /context7/);
   assert.match(output, /Playwright CLI directly/);
+  assert.match(output, /Do not use `npx playwright`/);
   assert.doesNotMatch(output, /# - playwright/);
 });
 
@@ -49,6 +50,7 @@ test("default templates mention repo guidance", () => {
 
   assert.match(instructions, /This workspace is managed by `openclaw-repo-agent`/);
   assert.match(instructions, /Use Playwright CLI directly for browser automation/);
+  assert.match(instructions, /Never use `npx playwright`/);
   assert.match(instructions, /Keep replies concise in Telegram-style channels/);
   assert.match(knowledge, /Record stable repo facts here/);
 });

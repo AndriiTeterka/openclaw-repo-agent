@@ -53,6 +53,8 @@ npx openclaw-repo-agent pair
 
 If the default prebuilt runtime image is unavailable, `up` automatically falls back to a local runtime build and persists that choice in `.openclaw/local.env`.
 
+Run `pair` after opening the dashboard or messaging the Telegram bot to approve the latest pending local gateway/device and Telegram pairing requests.
+
 `init` auto-detects repo-derived settings first, including project name, tooling profile, instruction files, knowledge files, and verification commands. The interactive flow mainly asks for user-specific inputs such as:
 
 - ACP default agent
@@ -92,7 +94,7 @@ Configuration precedence:
 - `init`: bootstrap or refresh `.openclaw` files for a repository
 - `up`: render runtime state and start the local OpenClaw stack
 - `down`: stop the local stack
-- `pair`: auto-approve the latest pending local Telegram DM pairing request, or switch to external device pairing when `--gateway-url` is supplied
+- `pair`: approve the latest pending local gateway/device and Telegram pairing requests, or switch to external device pairing when `--gateway-url` is supplied
 - `status`: show effective runtime settings and optionally check npm for updates
 - `doctor`: validate Docker, auth, render status, gateway health, and Telegram readiness
 - `verify`: run configured verification commands inside the gateway container
@@ -133,6 +135,7 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - `OPENCLAW_GATEWAY_BIND=lan` is intentional in the generated Docker setup so bridge traffic can reach the gateway inside the container; the generated Compose file still publishes the host port on `127.0.0.1` only unless you change the port mapping.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
+- The runtime image also preinstalls `playwright-cli`, Chromium, and Playwright's Linux browser dependencies, seeds Playwright CLI to use bundled Chromium by default, removes stale `npx playwright` cache state on startup, and routes bare `playwright` invocations back to `playwright-cli`.
 - Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
