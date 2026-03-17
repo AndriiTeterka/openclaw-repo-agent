@@ -3,7 +3,3 @@ dist/
 *.log
 *.tgz
 .DS_Store
-.openclaw/local.env
-.openclaw/state/
-examples/**/.openclaw/local.env
-examples/**/.openclaw/state/

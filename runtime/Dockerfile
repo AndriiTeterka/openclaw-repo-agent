@@ -31,7 +31,9 @@ RUN apt-get update \
  && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
 
+COPY runtime/playwright-cli-daemon-patch.mjs /opt/openclaw/playwright-cli-daemon-patch.mjs
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global @openai/codex @playwright/cli \
+ && node /opt/openclaw/playwright-cli-daemon-patch.mjs "$(npm root -g)" \
  && "$(npm root -g)/@playwright/cli/node_modules/.bin/playwright" install --with-deps chromium \
  && if [ -n "${OPENCLAW_AGENT_NPM_PACKAGES}" ]; then npm install --global ${OPENCLAW_AGENT_NPM_PACKAGES}; fi \
  && npm cache clean --force \
@@ -44,6 +46,8 @@ RUN mkdir -p /home/node/.openclaw /ms-playwright \
  && chown -R node:node /home/node /ms-playwright
 
 COPY runtime/playwright-cli.config.json /app/.playwright/cli.config.json
+# Preserve npm's real Playwright CLI symlink before installing the repo wrapper at the public path.
+RUN mv /usr/local/bin/playwright-cli /usr/local/bin/playwright-cli-real
 COPY runtime/playwright-cli-wrapper.mjs /usr/local/bin/playwright-cli
 COPY runtime/playwright-shim.sh /usr/local/bin/playwright
 COPY runtime/shared.mjs /opt/openclaw/shared.mjs
@@ -54,9 +58,11 @@ COPY runtime/doctor.mjs /opt/openclaw/doctor.mjs
 COPY runtime/render-openclaw-config.mjs /opt/openclaw/render-openclaw-config.mjs
 COPY runtime/extensions/workspace-openclaw /opt/openclaw/plugins/workspace-openclaw
 COPY runtime/entrypoint.sh /usr/local/bin/openclaw-entrypoint
-RUN sed -i 's/\r$//' /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli \
- && chmod 755 /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli \
- && chown -R node:node /home/node /opt/openclaw /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli /app/.playwright
+RUN mv /usr/local/bin/npx /usr/local/bin/npx-real
+COPY runtime/npx-wrapper.mjs /usr/local/bin/npx
+RUN sed -i 's/\r$//' /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli /usr/local/bin/npx \
+ && chmod 755 /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli /usr/local/bin/npx /usr/local/bin/npx-real \
+ && chown -R node:node /home/node /opt/openclaw /usr/local/bin/openclaw-entrypoint /usr/local/bin/playwright /usr/local/bin/playwright-cli /usr/local/bin/npx /usr/local/bin/npx-real /app/.playwright
 
 USER node
 

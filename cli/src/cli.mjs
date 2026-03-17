@@ -2937,7 +2937,7 @@ async function handleMcpSetup(context, options) {
     buildStatusSection("Notes", "info", [
       payload.actions.length > 0 ? `Docker MCP: ${payload.actions.join(", ")}` : "Docker MCP: ready",
       "GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/local.env.",
-      "Use Playwright CLI directly for browser automation; Playwright MCP is not enabled and `npx playwright` should not be used in this repo.",
+      "Use `playwright-cli` as the only browser automation tool in this repo; do not use `npx playwright`.",
       payload.nextStep
     ])
   ].filter(Boolean));

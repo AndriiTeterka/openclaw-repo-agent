@@ -4,5 +4,6 @@
     "launchOptions": {
       "channel": "chromium"
     }
-  }
+  },
+  "outputDir": ".openclaw/playwright/artifacts"
 }

@@ -135,7 +135,8 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - `OPENCLAW_GATEWAY_BIND=lan` is intentional in the generated Docker setup so bridge traffic can reach the gateway inside the container; the generated Compose file still publishes the host port on `127.0.0.1` only unless you change the port mapping.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
-- The runtime image also preinstalls `playwright-cli`, Chromium, and Playwright's Linux browser dependencies, seeds Playwright CLI to use bundled Chromium by default, removes stale `npx playwright` cache state on startup, and routes bare `playwright` invocations back to `playwright-cli`.
+- The runtime image also preinstalls `playwright-cli`, Chromium, and Playwright's Linux browser dependencies, seeds Playwright CLI to use bundled Chromium by default, removes stale `npx playwright` cache state on startup, reroutes both `playwright` and `npx playwright` back to `playwright-cli`, and treats `playwright-cli` as the only supported browser automation entrypoint for this project.
+- Playwright CLI workspace config lives under `.openclaw/playwright/`. Normal CLI responses stay on stdout instead of auto-generating page or console files; explicit saved artifacts go under `.openclaw/playwright/artifacts/`.
 - Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.
 - The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
@@ -162,7 +163,7 @@ What this does:
 - mirrors configured `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and optional `GITHUB_PERSONAL_ACCESS_TOKEN` into Docker MCP secrets
 - activates the repo's Docker MCP config only when you run `mcp use`
 - reconnects Codex to `docker mcp gateway run` when you run `mcp use`
-- uses Playwright CLI directly for browser automation instead of Docker MCP's Playwright server
+- uses `playwright-cli` as the only supported browser automation tool for this project
 
 External pairing:
 
@@ -180,7 +181,7 @@ Notes:
 - `mcp connect` is kept as an alias to `mcp use` during migration
 - `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/local.env` and rerunning `init`, `up`, or `mcp setup`
 - `context7` is enabled permanently for version-specific documentation lookup
-- Playwright MCP is intentionally not enabled; use Playwright CLI directly when browser automation is needed
+- browser automation in this project should always use `playwright-cli`
 - the repo-local Docker MCP config only scopes filesystem access for this repo; the other recommended servers do not need per-repo config
 - use `mcp setup` and `mcp use` as repair commands if the repo-local config or Codex connection gets out of sync
 
