@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   defaultInstructionsTemplate,
-  defaultKnowledgeTemplate,
   defaultLocalEnvExample,
   renderComposeTemplate,
   renderDockerMcpConfigTemplate
@@ -49,11 +48,11 @@ test("renderComposeTemplate always includes the managed runtime build", () => {
   assert.match(output, /127\.0\.0\.1:\$\{OPENCLAW_GATEWAY_PORT\}:\$\{OPENCLAW_GATEWAY_PORT\}/);
   assert.match(output, /Keep the host publish loopback-only by default/);
   assert.match(output, /"openclaw",\s*"health",\s*"--timeout",\s*"5000"/);
+  assert.doesNotMatch(output, /\$\{TARGET_AUTH_PATH\}:\/agent-auth:ro/);
 });
 
 test("default templates mention repo guidance", () => {
   const instructions = defaultInstructionsTemplate("Demo");
-  const knowledge = defaultKnowledgeTemplate("Demo");
 
   assert.match(instructions, /This workspace is managed by `openclaw-repo-agent`/);
   assert.match(instructions, /playwright-cli` as the only browser automation tool/i);
@@ -61,5 +60,10 @@ test("default templates mention repo guidance", () => {
   assert.match(instructions, /\.openclaw\/playwright\/artifacts\//);
   assert.match(instructions, /avoid parallel tool calls/i);
   assert.match(instructions, /Keep replies concise in Telegram-style channels/);
-  assert.match(knowledge, /Record stable repo facts here/);
+});
+
+test("renderComposeTemplate includes auth mount when requested", () => {
+  const output = renderComposeTemplate({ includeAuthMount: true });
+
+  assert.match(output, /\$\{TARGET_AUTH_PATH\}:\/agent-auth:ro/);
 });

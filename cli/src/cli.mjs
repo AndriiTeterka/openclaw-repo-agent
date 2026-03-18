@@ -43,7 +43,6 @@ import {
 } from "./builtin-profiles.mjs";
 import {
   defaultInstructionsTemplate,
-  defaultKnowledgeTemplate,
   defaultLocalEnvExample,
   renderDockerMcpConfigTemplate,
   renderComposeTemplate
@@ -75,8 +74,6 @@ import {
 } from "./reporting.mjs";
 
 const ARRAY_FLAGS = new Set([
-  "instruction-file",
-  "knowledge-file",
   "verification-command",
   "allow-user",
   "group-allow-user",
@@ -133,7 +130,6 @@ const DEFAULT_LOCAL_ENV_FILE = "local.env";
 const DEFAULT_LOCAL_ENV_EXAMPLE_FILE = "local.env.example";
 const DEFAULT_PLUGIN_FILE = "plugin.json";
 const DEFAULT_INSTRUCTIONS_FILE = "instructions.md";
-const DEFAULT_KNOWLEDGE_FILE = "knowledge.md";
 const LOCAL_ENV_HEADER = "Local-only OpenClaw configuration. Keep this file out of git.";
 
 export const ACP_AGENT_CHOICES = [
@@ -703,7 +699,6 @@ function resolvePaths(repoRoot) {
     stateDir,
     pluginFile: path.join(openclawDir, DEFAULT_PLUGIN_FILE),
     instructionsFile: path.join(openclawDir, DEFAULT_INSTRUCTIONS_FILE),
-    knowledgeFile: path.join(openclawDir, DEFAULT_KNOWLEDGE_FILE),
     localEnvFile: path.join(openclawDir, DEFAULT_LOCAL_ENV_FILE),
     localEnvExampleFile: path.join(openclawDir, DEFAULT_LOCAL_ENV_EXAMPLE_FILE),
     composeFile: path.join(stateDir, DEFAULT_STATE_COMPOSE_FILE),
@@ -711,7 +706,6 @@ function resolvePaths(repoRoot) {
     runtimeEnvFile: path.join(stateDir, DEFAULT_STATE_ENV_FILE),
     dockerMcpConfigFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE),
     dockerMcpSecretsFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE),
-    emptyAuthDir: path.join(stateDir, "auth-empty")
   };
 }
 
@@ -783,18 +777,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   const profileDefaults = cloneProfile(profileName);
   const merged = deepMerge(profileDefaults, rawConfig ?? {});
 
-  const instructionFiles = options.instructionFile?.length
-    ? options.instructionFile
-    : Array.isArray(rawConfig?.instructionFiles) && rawConfig.instructionFiles.length > 0
-      ? rawConfig.instructionFiles
-      : [...detection.instructionCandidates, ...profileDefaults.instructionFiles];
-
-  const knowledgeFiles = options.knowledgeFile?.length
-    ? options.knowledgeFile
-    : Array.isArray(rawConfig?.knowledgeFiles) && rawConfig.knowledgeFiles.length > 0
-      ? rawConfig.knowledgeFiles
-      : [...profileDefaults.knowledgeFiles];
-
   const verificationCommands = options.verificationCommand?.length
     ? options.verificationCommand
     : Array.isArray(rawConfig?.verificationCommands) && rawConfig.verificationCommands.length > 0
@@ -821,8 +803,6 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
     toolingProfile,
     runtimeProfile,
     queueProfile,
-    instructionFiles: uniqueStrings(instructionFiles),
-    knowledgeFiles: uniqueStrings(knowledgeFiles.length > 0 ? knowledgeFiles : [".openclaw/knowledge.md"]),
     verificationCommands: uniqueStrings(verificationCommands),
     agent: deepMerge(merged.agent ?? {}),
     telegram: deepMerge(merged.telegram ?? {}),
@@ -938,8 +918,6 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
     toolingProfile,
     runtimeProfile,
     queueProfile,
-    instructionFiles: options.instructionFile?.length ? options.instructionFile : plugin.instructionFiles,
-    knowledgeFiles: options.knowledgeFile?.length ? options.knowledgeFile : plugin.knowledgeFiles,
     verificationCommands: options.verificationCommand?.length ? options.verificationCommand : plugin.verificationCommands,
     agent: {
       defaultModel: normalizeDefaultAgentModel(
@@ -1058,7 +1036,7 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthP
   const effectiveTargetAuthPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim() || detectedCodexAuthPath;
   const targetAuthPath = effectiveTargetAuthPath
     ? path.resolve(effectiveTargetAuthPath.replace(/\//g, path.sep))
-    : context.paths.emptyAuthDir;
+    : "";
   const telegramTokenHash = fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN);
 
   return {
@@ -1116,7 +1094,7 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthP
     OPENCLAW_COMMAND_LOGGER_ENABLED: String(Boolean(manifest.security.commandLoggerEnabled)),
     TARGET_REPO_PATH: toDockerPath(context.repoRoot),
     GENERATED_MANIFEST_PATH: toDockerPath(context.paths.manifestFile),
-    TARGET_AUTH_PATH: toDockerPath(targetAuthPath)
+    TARGET_AUTH_PATH: targetAuthPath ? toDockerPath(targetAuthPath) : ""
   };
 }
 
@@ -1455,11 +1433,12 @@ async function prepareState(context, options = {}) {
   }
 
   await ensureDir(context.paths.stateDir);
-  await ensureDir(context.paths.emptyAuthDir);
   await ensureDockerMcpConfig(context);
   await writeJsonFile(context.paths.manifestFile, manifest);
-  await writeTextFile(context.paths.composeFile, renderComposeTemplate({}));
   const runtimeEnv = buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthPath);
+  await writeTextFile(context.paths.composeFile, renderComposeTemplate({
+    includeAuthMount: Boolean(String(runtimeEnv.TARGET_AUTH_PATH ?? "").trim()),
+  }));
   await writeEnvFile(context.paths.runtimeEnvFile, runtimeEnv);
 
   return {
@@ -1806,8 +1785,6 @@ export async function collectInitPromptState(prompter, context, plugin, existing
   const deploymentProfile = plugin.deploymentProfile;
   const runtimeProfile = plugin.runtimeProfile;
   const queueProfile = plugin.queueProfile;
-  const instructionFiles = plugin.instructionFiles;
-  const knowledgeFiles = plugin.knowledgeFiles;
   const verificationCommands = plugin.verificationCommands;
 
   const acpDefaultAgent = await promptChoice(prompter, "ACP default agent", ACP_AGENT_CHOICES, plugin.acp.defaultAgent || "codex");
@@ -1876,8 +1853,6 @@ export async function collectInitPromptState(prompter, context, plugin, existing
     authMode,
     acpDefaultAgent,
     acpAllowedAgent: acpAllowedAgents,
-    instructionFile: instructionFiles,
-    knowledgeFile: knowledgeFiles,
     verificationCommand: verificationCommands
   });
 
@@ -1943,9 +1918,6 @@ async function handleInit(context, options) {
 
   if (!(await fileExists(context.paths.instructionsFile)) || options.force) {
     await writeTextFile(context.paths.instructionsFile, defaultInstructionsTemplate(plugin.projectName));
-  }
-  if (!(await fileExists(context.paths.knowledgeFile)) || options.force) {
-    await writeTextFile(context.paths.knowledgeFile, defaultKnowledgeTemplate(plugin.projectName));
   }
 
   if (!(await fileExists(context.paths.localEnvFile)) || options.force) {

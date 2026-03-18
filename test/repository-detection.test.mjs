@@ -33,7 +33,6 @@ test("detectRepository infers project name and node verification commands from p
     assert.equal(detection.projectName, "api-service");
     assert.equal(detection.toolingProfile, "node20");
     assert.deepEqual(detection.verificationCommands, ["pnpm run build", "pnpm test"]);
-    assert.deepEqual(detection.instructionCandidates, ["README.md", ".openclaw/instructions.md"]);
   });
 });
 

@@ -189,11 +189,6 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   const projectName = nonEmptyString(rawManifest.projectName, defaultProjectName(repoPath));
   const deploymentProfile = nonEmptyString(rawManifest.deploymentProfile, defaultDeploymentProfile(hostPlatform));
   const toolingProfile = nonEmptyString(rawManifest.toolingProfile, "none");
-  const knowledgeFiles = uniqueStrings(toStringArray(rawManifest.knowledgeFiles, []));
-  const instructionFiles = uniqueStrings([
-    ...toStringArray(rawManifest.instructionFiles, ["AGENTS.md"]),
-    ...knowledgeFiles,
-  ]);
   const verificationCommands = uniqueStrings(toStringArray(rawManifest.verificationCommands, []));
 
   const security = deepMerge(runtimePreset.security, isPlainObject(rawManifest.security) ? rawManifest.security : {});
@@ -271,8 +266,6 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
     toolingInstallCommand: nonEmptyString(rawManifest.toolingInstallCommand, ""),
     runtimeProfile,
     queueProfile,
-    instructionFiles,
-    knowledgeFiles,
     verificationCommands,
     agent,
     queue,
@@ -297,9 +290,7 @@ export function validateProjectManifest(manifest) {
   pushError(errors, SUPPORTED_TOOLING_PROFILES.includes(manifest.toolingProfile), `toolingProfile must be one of ${SUPPORTED_TOOLING_PROFILES.join(", ")}`);
   pushError(errors, SUPPORTED_RUNTIME_PROFILES.includes(manifest.runtimeProfile), `runtimeProfile must be one of ${SUPPORTED_RUNTIME_PROFILES.join(", ")}`);
   pushError(errors, SUPPORTED_RUNTIME_PROFILES.includes(manifest.queueProfile), `queueProfile must be one of ${SUPPORTED_RUNTIME_PROFILES.join(", ")}`);
-  pushError(errors, Array.isArray(manifest.instructionFiles), "instructionFiles must be an array");
   pushError(errors, Array.isArray(manifest.verificationCommands), "verificationCommands must be an array");
-  pushError(errors, Array.isArray(manifest.knowledgeFiles), "knowledgeFiles must be an array");
   pushError(errors, Boolean(manifest.agent?.id), "agent.id is required");
   pushError(errors, Number.isInteger(manifest.agent?.maxConcurrent) && manifest.agent.maxConcurrent > 0, "agent.maxConcurrent must be a positive integer");
   pushError(errors, ["collect", "steer"].includes(manifest.queue?.mode), "queue.mode must be collect or steer");
@@ -400,10 +391,11 @@ export function buildOpenClawConfig(manifest, env = process.env) {
   const acpxNonInteractivePermissions = nonEmptyString(env.OPENCLAW_ACPX_NON_INTERACTIVE_PERMISSIONS, "fail");
   const execTimeoutSec = resolveInteger(env.OPENCLAW_EXEC_TIMEOUT_SEC, manifest.tools.exec.timeoutSec);
 
-  const bootstrapFiles = uniqueStrings([
-    ...manifest.instructionFiles,
-    ...manifest.knowledgeFiles,
-  ]);
+  const bootstrapFiles = [
+    "AGENTS.md",
+    "README.md",
+    ".openclaw/instructions.md",
+  ];
 
   return {
     config: {
@@ -557,8 +549,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               workspace,
               repoRoot,
               toolingProfile: manifest.toolingProfile,
-              instructionFiles: manifest.instructionFiles,
-              knowledgeFiles: manifest.knowledgeFiles,
               verificationCommands: manifest.verificationCommands,
               agentDefaultModel,
               agentVerboseDefault,

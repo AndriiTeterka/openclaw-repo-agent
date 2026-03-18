@@ -31,18 +31,6 @@
       "toolingProfile": {
         "type": "string"
       },
-      "instructionFiles": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "knowledgeFiles": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
       "verificationCommands": {
         "type": "array",
         "items": {

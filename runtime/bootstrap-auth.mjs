@@ -266,7 +266,7 @@ async function noneAdapter() {
 
 export async function probeAuth(options = {}) {
   const homeDir = process.env.HOME?.trim() || "/home/node";
-  const authMountPath = process.env.OPENCLAW_AUTH_MOUNT?.trim() || "/agent-auth";
+  const authMountPath = "/agent-auth";
   const manifestPath = process.env.OPENCLAW_PROJECT_MANIFEST?.trim() || "/config/project-manifest.json";
   const manifest = normalizeProjectManifest(await readJsonFile(manifestPath, {}));
   const mode = normalizeAuthMode(process.env.OPENCLAW_BOOTSTRAP_AUTH_MODE ?? manifest.security.authBootstrapMode);

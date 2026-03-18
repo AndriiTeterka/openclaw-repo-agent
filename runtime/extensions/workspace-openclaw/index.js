@@ -6,8 +6,6 @@ function listOfStrings(value) {
 }
 
 function buildSystemContext(config) {
-  const instructionFiles = listOfStrings(config.instructionFiles);
-  const knowledgeFiles = listOfStrings(config.knowledgeFiles);
   const verificationCommands = listOfStrings(config.verificationCommands);
   const acpAllowedAgents = listOfStrings(config.acpAllowedAgents);
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
@@ -70,16 +68,6 @@ function buildSystemContext(config) {
       : "Telegram ACP thread bindings are disabled by default; use oneshot ACP turns or explicit /acp commands instead of assuming thread-bound ACP sessions.",
   ];
 
-  if (instructionFiles.length > 0) {
-    lines.push("Workspace bootstrap files:");
-    for (const file of instructionFiles) lines.push(`- ${file}`);
-  }
-
-  if (knowledgeFiles.length > 0) {
-    lines.push("Project knowledge files:");
-    for (const file of knowledgeFiles) lines.push(`- ${file}`);
-  }
-
   if (verificationCommands.length > 0) {
     lines.push("Run these verification commands after code changes when relevant:");
     for (const command of verificationCommands) lines.push(`- ${command}`);
@@ -89,8 +77,6 @@ function buildSystemContext(config) {
 }
 
 function buildStatusReply(config, detail) {
-  const instructionFiles = listOfStrings(config.instructionFiles);
-  const knowledgeFiles = listOfStrings(config.knowledgeFiles);
   const verificationCommands = listOfStrings(config.verificationCommands);
   const acpAllowedAgents = listOfStrings(config.acpAllowedAgents);
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
@@ -123,16 +109,6 @@ function buildStatusReply(config, detail) {
     return verificationCommands.length > 0
       ? `Verification commands:\n${verificationCommands.map((command) => `- ${command}`).join("\n")}`
       : "No verification commands are configured for this workspace.";
-  }
-
-  if (detailMode === "instructions") {
-    const entries = [
-      ...instructionFiles.map((file) => `- ${file}`),
-      ...knowledgeFiles.map((file) => `- ${file}`),
-    ];
-    return entries.length > 0
-      ? `Workspace bootstrap files:\n${entries.join("\n")}`
-      : "No extra bootstrap files are configured for this workspace.";
   }
 
   if (detailMode === "runtime") {
@@ -182,8 +158,7 @@ function buildStatusReply(config, detail) {
     `Telegram block streaming: ${telegramBlockStreaming ? "enabled" : "disabled"}`,
     `Telegram ACP topic bindings: ${telegramThreadBindingsEnabled ? "enabled" : "disabled"}`,
     `Verification commands: ${verificationCommands.length}`,
-    `Bootstrap files: ${instructionFiles.length + knowledgeFiles.length}`,
-    "Details: `/repo-status verification`, `/repo-status instructions`, or `/repo-status runtime`.",
+    "Details: `/repo-status verification` or `/repo-status runtime`.",
   ].filter(Boolean).join("\n");
 }
 

@@ -65,8 +65,6 @@ function baseProfile(overrides = {}) {
     toolingProfile: "none",
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    instructionFiles: [".openclaw/instructions.md"],
-    knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: [],
     agent: { ...STABLE_AGENT_DEFAULTS },
     telegram: { ...STABLE_TELEGRAM_DEFAULTS },

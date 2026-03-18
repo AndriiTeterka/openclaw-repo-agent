@@ -17,16 +17,6 @@ export function defaultInstructionsTemplate(projectName) {
 `;
 }
 
-export function defaultKnowledgeTemplate(projectName) {
-  return `# Repo Agent Knowledge
-
-- Project: ${projectName}
-- This file is injected into OpenClaw runs as project knowledge.
-- Record stable repo facts here: build/test commands, important architecture notes, and operator constraints.
-- Keep secrets and machine-specific values out of this file.
-`;
-}
-
 export function defaultLocalEnvExample(values = {}) {
   const stackImage = values.stackImage || "openclaw-repo-agent-runtime:local";
   const gatewayPort = values.gatewayPort || String(GATEWAY_PORT_RANGE_START);
@@ -107,7 +97,8 @@ filesystem:
 `;
 }
 
-export function renderComposeTemplate() {
+export function renderComposeTemplate(options = {}) {
+  const authVolume = options.includeAuthMount ? "    - ${TARGET_AUTH_PATH}:/agent-auth:ro\n" : "";
   const buildSection = `x-openclaw-build: &openclaw-build
   context: \${OPENCLAW_PRODUCT_ROOT}
   dockerfile: runtime/Dockerfile
@@ -142,7 +133,6 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
     OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: \${OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS}
     TELEGRAM_BOT_TOKEN: \${TELEGRAM_BOT_TOKEN}
     OPENAI_API_KEY: \${OPENAI_API_KEY}
-    OPENCLAW_AUTH_MOUNT: /agent-auth
     OPENCLAW_WORKSPACE: /workspace
     OPENCLAW_REPO_ROOT: /workspace
     OPENCLAW_PROJECT_MANIFEST: /config/project-manifest.json
@@ -190,8 +180,7 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
     GIT_CONFIG_VALUE_0: /workspace
   volumes:
     - openclaw-home:/home/node
-    - \${TARGET_AUTH_PATH}:/agent-auth:ro
-    - \${TARGET_REPO_PATH}:/workspace:rw
+${authVolume}    - \${TARGET_REPO_PATH}:/workspace:rw
     - \${GENERATED_MANIFEST_PATH}:/config/project-manifest.json:ro
   tmpfs:
     - /tmp

@@ -70,7 +70,7 @@ You can still override detected repo settings and Telegram policy later in `.ope
 
 The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
 
-- repo config files: `.openclaw/plugin.json`, `.openclaw/instructions.md`, `.openclaw/knowledge.md`, `.openclaw/local.env.example`
+- repo config files: `.openclaw/plugin.json`, `.openclaw/local.env.example`
 - local runtime files: `.openclaw/local.env`, `.openclaw/state/`
 
 If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.

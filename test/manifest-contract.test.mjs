@@ -12,8 +12,6 @@ function createManifest(overrides = {}) {
     toolingProfile: "none",
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    instructionFiles: ["AGENTS.md"],
-    knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: ["npm test"],
     agent: {
       id: "workspace"
@@ -36,18 +34,10 @@ function createManifest(overrides = {}) {
   });
 }
 
-test("normalizeProjectManifest folds bootstrap files and ACP agents into stable defaults", () => {
-  const manifest = createManifest({
-    instructionFiles: ["README.md"],
-    knowledgeFiles: [".openclaw/knowledge.md", "docs/project-knowledge.md"]
-  });
+test("normalizeProjectManifest folds ACP agents into stable defaults", () => {
+  const manifest = createManifest();
 
   assert.deepEqual(manifest.acp.allowedAgents, ["codex"]);
-  assert.deepEqual(manifest.instructionFiles, [
-    "README.md",
-    ".openclaw/knowledge.md",
-    "docs/project-knowledge.md"
-  ]);
 });
 
 test("buildOpenClawConfig uses OPENCLAW_TELEGRAM_STREAM_MODE env override", () => {

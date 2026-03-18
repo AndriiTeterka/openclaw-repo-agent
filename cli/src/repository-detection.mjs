@@ -158,22 +158,6 @@ export async function detectRepository(repoRoot) {
   if (markers.goMod) signals.push("go122");
 
   const toolingProfile = signals.length > 1 ? "polyglot" : signals[0] ?? "none";
-  const [hasAgentsInstructions, hasReadme, hasProjectKnowledge] = await Promise.all([
-    fileExists(path.join(repoRoot, "AGENTS.md")),
-    fileExists(path.join(repoRoot, "README.md")),
-    fileExists(path.join(repoRoot, "docs", "openclaw-project-knowledge.md"))
-  ]);
-
-  const instructionCandidates = [];
-  if (hasAgentsInstructions) instructionCandidates.push("AGENTS.md");
-  if (hasReadme) instructionCandidates.push("README.md");
-  instructionCandidates.push(".openclaw/instructions.md");
-
-  const knowledgeCandidates = [".openclaw/knowledge.md"];
-  if (hasProjectKnowledge) {
-    knowledgeCandidates.push("docs/openclaw-project-knowledge.md");
-  }
-
   const verificationCommands = [];
   if (signals.includes("java17")) {
     if (markers.gradlew) verificationCommands.push("./gradlew build");
@@ -193,8 +177,6 @@ export async function detectRepository(repoRoot) {
     profile: "custom",
     projectName: metadata.projectName,
     toolingProfile,
-    instructionCandidates: uniqueStrings(instructionCandidates),
-    knowledgeCandidates: uniqueStrings(knowledgeCandidates),
     verificationCommands: uniqueStrings(verificationCommands)
   };
 }

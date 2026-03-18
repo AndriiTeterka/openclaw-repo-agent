@@ -31,8 +31,6 @@ function createPromptTestContext(tempRoot = repoRoot) {
     detection: {
       projectName: "demo-workspace",
       toolingProfile: "none",
-      instructionCandidates: [],
-      knowledgeCandidates: [],
       verificationCommands: []
     }
   };
@@ -47,8 +45,6 @@ function createPromptTestPlugin() {
     toolingProfile: "none",
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    instructionFiles: [".openclaw/instructions.md"],
-    knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: [],
     agent: {
       id: "workspace",
@@ -528,8 +524,6 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
     toolingProfile: "none",
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    instructionFiles: [".openclaw/instructions.md"],
-    knowledgeFiles: [".openclaw/knowledge.md"],
     verificationCommands: [],
     agent: {
       id: "workspace",
