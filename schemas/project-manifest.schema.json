@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/openclaw/project-manifest.schema.json",
+  "$id": "https://github.com/AndriiTeterka/openclaw-repo-agent/blob/main/schemas/project-manifest.schema.json",
   "title": "OpenClaw Project Manifest",
   "type": "object",
   "additionalProperties": true,

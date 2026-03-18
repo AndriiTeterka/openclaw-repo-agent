@@ -50,11 +50,10 @@ test("normalizeProjectManifest folds bootstrap files and ACP agents into stable 
   ]);
 });
 
-test("buildOpenClawConfig prefers OPENCLAW_TELEGRAM_STREAM_MODE over the legacy runtime variable", () => {
+test("buildOpenClawConfig uses OPENCLAW_TELEGRAM_STREAM_MODE env override", () => {
   const manifest = createManifest();
   const { config } = buildOpenClawConfig(manifest, {
-    OPENCLAW_TELEGRAM_STREAM_MODE: "off",
-    OPENCLAW_TELEGRAM_STREAMING: "block"
+    OPENCLAW_TELEGRAM_STREAM_MODE: "off"
   });
 
   assert.equal(config.channels.telegram.streamMode, "off");

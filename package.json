@@ -38,14 +38,12 @@
   ],
   "dependencies": {
     "chalk": "^5.6.2",
-    "figures": "^6.1.0",
     "inquirer": "^13.3.2",
-    "log-symbols": "^7.0.1",
     "ora": "^9.3.0",
     "string-width": "^8.2.0"
   },
   "scripts": {
-    "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./examples/custom --product-root . --json",
+    "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./test/fixtures/custom --product-root . --json",
     "test:unit": "node --test",
     "pack:dry-run": "npm pack --dry-run",
     "release:check": "npm run test:unit && npm run check && npm run pack:dry-run",

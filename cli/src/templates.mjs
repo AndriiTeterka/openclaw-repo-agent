@@ -1,5 +1,5 @@
-import { DEFAULT_OPENCLAW_IMAGE, DEFAULT_RUNTIME_IMAGE_REPOSITORY, PRODUCT_VERSION } from "./builtin-profiles.mjs";
-import { LEGACY_COMPOSE_PORT } from "./instance-registry.mjs";
+import { DEFAULT_OPENCLAW_IMAGE } from "./builtin-profiles.mjs";
+import { GATEWAY_PORT_RANGE_START } from "./instance-registry.mjs";
 
 export function defaultInstructionsTemplate(projectName) {
   return `# Repo Agent Instructions
@@ -27,11 +27,9 @@ export function defaultKnowledgeTemplate(projectName) {
 `;
 }
 
-export function defaultLocalEnvExample(useLocalBuild = false, values = {}) {
-  const stackImage = values.stackImage || (useLocalBuild
-    ? "openclaw-repo-agent-runtime:local"
-    : `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`);
-  const gatewayPort = values.gatewayPort || String(LEGACY_COMPOSE_PORT);
+export function defaultLocalEnvExample(values = {}) {
+  const stackImage = values.stackImage || "openclaw-repo-agent-runtime:local";
+  const gatewayPort = values.gatewayPort || String(GATEWAY_PORT_RANGE_START);
   const instanceId = values.instanceId || "";
   const portManaged = values.portManaged ?? "true";
 
@@ -67,7 +65,6 @@ OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM=[]
 OPENCLAW_TELEGRAM_PROXY=
 OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY=true
 OPENCLAW_TOPIC_ACP=
-OPENCLAW_USE_LOCAL_BUILD=${useLocalBuild ? "true" : "false"}
 OPENCLAW_INSTANCE_ID=${instanceId}
 OPENCLAW_PORT_MANAGED=${portManaged}
 OPENCLAW_GATEWAY_PORT=${gatewayPort}
@@ -110,9 +107,8 @@ filesystem:
 `;
 }
 
-export function renderComposeTemplate({ useLocalBuild }) {
-  const buildSection = useLocalBuild
-    ? `x-openclaw-build: &openclaw-build
+export function renderComposeTemplate() {
+  const buildSection = `x-openclaw-build: &openclaw-build
   context: \${OPENCLAW_PRODUCT_ROOT}
   dockerfile: runtime/Dockerfile
   args:
@@ -122,10 +118,9 @@ export function renderComposeTemplate({ useLocalBuild }) {
     OPENCLAW_TOOLING_PROFILE: \${OPENCLAW_EFFECTIVE_TOOLING_PROFILE}
     OPENCLAW_TOOLING_INSTALL_COMMAND: \${OPENCLAW_TOOLING_INSTALL_COMMAND}
 
-`
-    : "";
+`;
 
-  const commonBuild = useLocalBuild ? "  build: *openclaw-build\n" : "";
+  const commonBuild = "  build: *openclaw-build\n";
 
   return `${buildSection}x-openclaw-common: &openclaw-common
 ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
@@ -170,7 +165,6 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
     OPENCLAW_TELEGRAM_DM_POLICY: \${OPENCLAW_TELEGRAM_DM_POLICY}
     OPENCLAW_TELEGRAM_GROUP_POLICY: \${OPENCLAW_TELEGRAM_GROUP_POLICY}
     OPENCLAW_TELEGRAM_STREAM_MODE: \${OPENCLAW_TELEGRAM_STREAM_MODE}
-    OPENCLAW_TELEGRAM_STREAMING: \${OPENCLAW_TELEGRAM_STREAMING}
     OPENCLAW_TELEGRAM_BLOCK_STREAMING: \${OPENCLAW_TELEGRAM_BLOCK_STREAMING}
     OPENCLAW_TELEGRAM_REPLY_TO_MODE: \${OPENCLAW_TELEGRAM_REPLY_TO_MODE}
     OPENCLAW_TELEGRAM_REACTION_LEVEL: \${OPENCLAW_TELEGRAM_REACTION_LEVEL}

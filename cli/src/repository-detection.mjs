@@ -1,10 +1,6 @@
 import path from "node:path";
 
-import { fileExists, readJsonFile, readTextFile } from "../../runtime/shared.mjs";
-
-function uniqueStrings(values) {
-  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
-}
+import { fileExists, readJsonFile, readTextFile, uniqueStrings } from "../../runtime/shared.mjs";
 
 function basenameFallback(repoRoot) {
   return path.basename(path.resolve(repoRoot));

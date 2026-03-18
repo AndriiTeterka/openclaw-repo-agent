@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-function isPlainObject(value) {
+export function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -77,6 +77,22 @@ export function parseStringArrayEnv(rawValue, fallback = []) {
   } catch (error) {
     throw new Error(`Invalid JSON array value "${rawValue}": ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+export function uniqueStrings(values) {
+  return [...new Set(values.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
+}
+
+export function normalizeTelegramPrincipal(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (raw === "*" || /^tg:/i.test(raw) || /^telegram:/i.test(raw) || raw.startsWith("@")) return raw;
+  if (/^-?\d+$/.test(raw)) return `tg:${raw}`;
+  return raw;
+}
+
+export function normalizePrincipalArray(values) {
+  return uniqueStrings(values.map((value) => normalizeTelegramPrincipal(value)));
 }
 
 export function deepMerge(...values) {

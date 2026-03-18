@@ -5,19 +5,16 @@ on:
     paths:
       - ".github/**"
       - "cli/**"
-      - "examples/**"
       - "package.json"
-      - "profiles/**"
       - "runtime/**"
       - "schemas/**"
+      - "test/**"
       - "README.md"
   pull_request:
     paths:
       - ".github/**"
       - "cli/**"
-      - "examples/**"
       - "package.json"
-      - "profiles/**"
       - "runtime/**"
       - "schemas/**"
       - "README.md"
@@ -40,4 +37,4 @@ jobs:
       - name: Validate example through reusable action
         uses: ./.github/actions/validate-plugin
         with:
-          repo-root: ./examples/custom
+          repo-root: ./test/fixtures/custom

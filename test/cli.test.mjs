@@ -13,13 +13,13 @@ import {
   CODEX_AUTH_SOURCE_CHOICES,
   defaultCodexAuthSource,
   describeCommandFromArgv,
-  deriveComposeProjectName,
   hasGitignoreEntry,
   looksLikeTelegramBotToken,
   promptChoice,
   selectLatestPendingDeviceRequest,
   selectLatestPendingPairingRequest
 } from "../cli/src/cli.mjs";
+import { deriveComposeProjectName } from "../cli/src/instance-registry.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(".");
@@ -149,7 +149,13 @@ test("up validates the Telegram bot token before starting the stack", async () =
   const source = await fs.readFile(path.join(repoRoot, "cli", "src", "cli.mjs"), "utf8");
 
   assert.match(source, /runWithSpinner\("Validating Telegram bot token", \(\) => ensureTelegramBotTokenReady\(context, state\), options\)/);
-  assert.match(source, /runWithSpinner\("Starting OpenClaw stack", \(\) => dockerCompose\(context, buildComposeUpArgs\(state\.useLocalBuild\)\), options\)/);
+  assert.match(source, /runWithSpinner\("Building local runtime image", \(\) => ensureLocalRuntimeImageBuilt\(context\), options\)/);
+  assert.match(source, /runWithSpinner\("Starting OpenClaw stack", \(\) => dockerCompose\(context, buildComposeUpArgs\(\)\), options\)/);
+  assert.doesNotMatch(source, /state\.useLocalBuild/);
+  assert.doesNotMatch(source, /ensureRuntimeImageReady\(/);
+  assert.doesNotMatch(source, /OPENCLAW_USE_LOCAL_BUILD/);
+  assert.doesNotMatch(source, /--use-local-build/);
+  assert.doesNotMatch(source, /Remote runtime image was unavailable/);
 });
 
 test("down no longer prints repo and project summary lines", async () => {
@@ -328,7 +334,7 @@ test("inline option syntax works for config validation", async () => {
     cliPath,
     "config",
     "validate",
-    "--repo-root=./examples/custom",
+    "--repo-root=./test/fixtures/custom",
     "--product-root=.",
     "--json=true"
   ], {
@@ -453,7 +459,7 @@ test("selectLatestPendingDeviceRequest returns the newest pending device request
 });
 
 test("example consumer repo ignores the full .openclaw directory", async () => {
-  const gitignore = await fs.readFile(path.join(repoRoot, "examples", "custom", ".gitignore"), "utf8");
+  const gitignore = await fs.readFile(path.join(repoRoot, "test", "fixtures", "custom", ".gitignore"), "utf8");
 
   assert.match(gitignore, /^\.openclaw\/$/m);
 });

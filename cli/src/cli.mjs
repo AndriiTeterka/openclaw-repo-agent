@@ -1,4 +1,5 @@
 import https from "node:https";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -12,14 +13,18 @@ import {
   deepMerge,
   ensureDir,
   fileExists,
+  normalizePrincipalArray,
+  normalizeTelegramPrincipal,
   readJsonFile,
   readTextFile,
   resolveBoolean,
   safeRunCommand,
+  uniqueStrings,
   writeJsonFile,
   writeTextFile
 } from "../../runtime/shared.mjs";
 import {
+  defaultDeploymentProfile,
   normalizeAuthMode,
   normalizeProjectManifest,
   validateProjectManifest
@@ -33,7 +38,6 @@ import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_NPM_PACKAGE_NAME,
   DEFAULT_OPENCLAW_IMAGE,
-  DEFAULT_RUNTIME_IMAGE_REPOSITORY,
   PRODUCT_NAME,
   PRODUCT_VERSION
 } from "./builtin-profiles.mjs";
@@ -53,19 +57,12 @@ import {
 } from "./docker-mcp.mjs";
 import { detectRepository } from "./repository-detection.mjs";
 import {
-  buildLocalRuntimeEnvOverrides,
-  isManagedLocalRuntimeImage,
-  isManagedRemoteRuntimeImage,
-  shouldAutoUseLocalBuild
-} from "./runtime-image.mjs";
-import {
   allocateGatewayPort,
   buildInstanceMetadata,
   buildRegistryEntry,
-  deriveComposeProjectName as deriveComposeProjectNameFromInstance,
+  deriveComposeProjectName,
   fingerprintTelegramBotToken,
   LEGACY_COMPOSE_PORT,
-  LEGACY_LOCAL_RUNTIME_IMAGE,
   listInstanceRegistryEntries,
   readInstanceRegistry,
   resolveInstanceRegistryPath,
@@ -94,7 +91,6 @@ const BOOLEAN_FLAGS = new Set([
   "verify",
   "topic-acp",
   "check-updates",
-  "use-local-build",
   "reassign-port",
   "force"
 ]);
@@ -151,22 +147,6 @@ export const CODEX_AUTH_SOURCE_CHOICES = [
   { value: "api-key", label: "Use OpenAI API key" }
 ];
 
-function uniqueStrings(values) {
-  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
-}
-
-function normalizeTelegramPrincipal(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  if (raw === "*" || /^tg:/i.test(raw) || /^telegram:/i.test(raw) || raw.startsWith("@")) return raw;
-  if (/^-?\d+$/.test(raw)) return `tg:${raw}`;
-  return raw;
-}
-
-function normalizePrincipalArray(values) {
-  return uniqueStrings(values.map((value) => normalizeTelegramPrincipal(value)));
-}
-
 function normalizeAllowedAgents(defaultAgent, allowedAgents = []) {
   return uniqueStrings([
     ...assertSupportedAcpAgentList(allowedAgents, "acp.allowedAgents"),
@@ -193,32 +173,15 @@ function toDockerPath(value) {
   return String(value ?? "").replace(/\\/g, "/");
 }
 
-function defaultDeploymentProfile() {
-  return process.platform === "win32" ? "wsl2" : "docker-local";
-}
-
-function defaultRuntimeImage() {
-  return `${DEFAULT_RUNTIME_IMAGE_REPOSITORY}:${PRODUCT_VERSION}-polyglot`;
-}
-
-export function deriveComposeProjectName(repoRoot) {
-  return deriveComposeProjectNameFromInstance(repoRoot);
-}
-
-function formatLegacyRuntimeImageWarning(context, currentImage) {
-  return `Migrated legacy local runtime image ${currentImage} to ${context.localRuntimeImage}.`;
-}
-
-function summarizeManagedRuntimeImageMigration(nextImage) {
-  return `Updated managed runtime image to ${nextImage}.`;
-}
-
 async function updateInstanceRegistry(context, localEnv = {}) {
   return await upsertInstanceRegistryEntry(context.instanceRegistryFile, buildRegistryEntry(context, localEnv));
 }
 
 async function ensureInstanceLocalEnv(context, localEnv, options = {}) {
-  const nextLocalEnv = { ...localEnv };
+  const nextLocalEnv = {
+    ...localEnv,
+    OPENCLAW_STACK_IMAGE: String(context.localRuntimeImage ?? "").trim(),
+  };
   const changes = [];
   const registry = await readInstanceRegistry(context.instanceRegistryFile);
   const registryEntries = listInstanceRegistryEntries(registry);
@@ -248,30 +211,10 @@ async function ensureInstanceLocalEnv(context, localEnv, options = {}) {
     changes.push(options.reassignPort ? "reassigned gateway port" : "allocated gateway port");
   }
 
-  const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, nextLocalEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
-  const currentStackImage = String(nextLocalEnv.OPENCLAW_STACK_IMAGE ?? "").trim();
-  const currentDefaultRuntimeImage = defaultRuntimeImage();
-  const managedRemoteRuntimeImage = isManagedRemoteRuntimeImage(currentStackImage);
-  const managedLocalRuntimeImage = isManagedLocalRuntimeImage(currentStackImage, context.instanceId);
-  if (useLocalBuild && (!currentStackImage || currentStackImage === currentDefaultRuntimeImage || managedRemoteRuntimeImage || managedLocalRuntimeImage)) {
-    if (currentStackImage !== context.localRuntimeImage) {
-      nextLocalEnv.OPENCLAW_STACK_IMAGE = context.localRuntimeImage;
-      changes.push(currentStackImage === LEGACY_LOCAL_RUNTIME_IMAGE
-        ? formatLegacyRuntimeImageWarning(context, currentStackImage)
-        : summarizeManagedRuntimeImageMigration(context.localRuntimeImage));
-    }
+  if (String(nextLocalEnv.OPENCLAW_STACK_IMAGE ?? "").trim() !== context.localRuntimeImage) {
+    nextLocalEnv.OPENCLAW_STACK_IMAGE = context.localRuntimeImage;
+    changes.push(`Updated managed runtime image to ${context.localRuntimeImage}.`);
   }
-
-  if (!useLocalBuild && managedRemoteRuntimeImage && currentStackImage !== currentDefaultRuntimeImage) {
-    nextLocalEnv.OPENCLAW_STACK_IMAGE = currentDefaultRuntimeImage;
-    changes.push(summarizeManagedRuntimeImageMigration(currentDefaultRuntimeImage));
-  }
-
-  if (!useLocalBuild && managedLocalRuntimeImage) {
-    nextLocalEnv.OPENCLAW_STACK_IMAGE = currentDefaultRuntimeImage;
-    changes.push(summarizeManagedRuntimeImageMigration(currentDefaultRuntimeImage));
-  }
-
   await updateInstanceRegistry(context, nextLocalEnv);
 
   return {
@@ -1042,9 +985,9 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
   });
 }
 
-function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, useLocalBuild, defaultTargetAuthPath = "") {
+function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, defaultTargetAuthPath = "") {
   const defaults = {
-    OPENCLAW_STACK_IMAGE: useLocalBuild ? context.localRuntimeImage : defaultRuntimeImage(),
+    OPENCLAW_STACK_IMAGE: context.localRuntimeImage,
     OPENCLAW_IMAGE: DEFAULT_OPENCLAW_IMAGE,
     OPENCLAW_AGENT_NPM_PACKAGES: "",
     OPENCLAW_AGENT_INSTALL_COMMAND: "",
@@ -1068,7 +1011,6 @@ function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options,
     OPENCLAW_TELEGRAM_PROXY: "",
     OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY: "true",
     OPENCLAW_TOPIC_ACP: "",
-    OPENCLAW_USE_LOCAL_BUILD: useLocalBuild ? "true" : "false",
     OPENCLAW_INSTANCE_ID: context.instanceId,
     OPENCLAW_PORT_MANAGED: "true",
     OPENCLAW_GATEWAY_PORT: String(LEGACY_COMPOSE_PORT),
@@ -1084,7 +1026,6 @@ function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options,
   const merged = {
     ...defaults,
     ...existingLocalEnv,
-    ...(options.useLocalBuild != null ? { OPENCLAW_USE_LOCAL_BUILD: options.useLocalBuild ? "true" : "false" } : {}),
     ...(options.telegramBotToken ? { TELEGRAM_BOT_TOKEN: options.telegramBotToken } : {}),
     ...(options.openaiApiKey ? { OPENAI_API_KEY: options.openaiApiKey } : {}),
     ...(options.targetAuthPath != null ? { TARGET_AUTH_PATH: toDockerPath(path.resolve(options.targetAuthPath)) } : {}),
@@ -1093,19 +1034,24 @@ function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options,
     ...(options.groupAllowUser?.length ? { OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(normalizePrincipalArray(options.groupAllowUser)) } : {})
   };
 
-  if (!String(merged.TARGET_AUTH_PATH ?? "").trim() && defaultTargetAuthPath) {
-    merged.TARGET_AUTH_PATH = defaultTargetAuthPath;
+  const normalized = {
+    ...merged,
+    OPENCLAW_STACK_IMAGE: String(context.localRuntimeImage ?? "").trim(),
+  };
+
+  if (!String(normalized.TARGET_AUTH_PATH ?? "").trim() && defaultTargetAuthPath) {
+    normalized.TARGET_AUTH_PATH = defaultTargetAuthPath;
   }
 
   if (plugin.security.authBootstrapMode !== "codex" && !options.openaiApiKey && options.targetAuthPath == null) {
-    merged.OPENAI_API_KEY = merged.OPENAI_API_KEY || "";
-    merged.TARGET_AUTH_PATH = merged.TARGET_AUTH_PATH || "";
+    normalized.OPENAI_API_KEY = normalized.OPENAI_API_KEY || "";
+    normalized.TARGET_AUTH_PATH = normalized.TARGET_AUTH_PATH || "";
   }
 
-  return merged;
+  return normalized;
 }
 
-function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, detectedCodexAuthPath = "") {
+function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthPath = "") {
   const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || String(LEGACY_COMPOSE_PORT);
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
     || JSON.stringify([`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`]);
@@ -1121,7 +1067,7 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, det
     OPENCLAW_PRODUCT_ROOT: toDockerPath(context.productRoot),
     OPENCLAW_PRODUCT_NAME: PRODUCT_NAME,
     OPENCLAW_PRODUCT_VERSION: PRODUCT_VERSION,
-    OPENCLAW_STACK_IMAGE: localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage(),
+    OPENCLAW_STACK_IMAGE: context.localRuntimeImage,
     OPENCLAW_IMAGE: localEnv.OPENCLAW_IMAGE || DEFAULT_OPENCLAW_IMAGE,
     OPENCLAW_AGENT_NPM_PACKAGES: localEnv.OPENCLAW_AGENT_NPM_PACKAGES || "",
     OPENCLAW_AGENT_INSTALL_COMMAND: localEnv.OPENCLAW_AGENT_INSTALL_COMMAND || "",
@@ -1152,7 +1098,6 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, det
     OPENCLAW_TELEGRAM_DM_POLICY: manifest.telegram.dmPolicy,
     OPENCLAW_TELEGRAM_GROUP_POLICY: manifest.telegram.groupPolicy,
     OPENCLAW_TELEGRAM_STREAM_MODE: manifest.telegram.streamMode,
-    OPENCLAW_TELEGRAM_STREAMING: manifest.telegram.streamMode,
     OPENCLAW_TELEGRAM_BLOCK_STREAMING: String(Boolean(manifest.telegram.blockStreaming)),
     OPENCLAW_TELEGRAM_REPLY_TO_MODE: manifest.telegram.replyToMode,
     OPENCLAW_TELEGRAM_REACTION_LEVEL: manifest.telegram.reactionLevel,
@@ -1171,8 +1116,7 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, det
     OPENCLAW_COMMAND_LOGGER_ENABLED: String(Boolean(manifest.security.commandLoggerEnabled)),
     TARGET_REPO_PATH: toDockerPath(context.repoRoot),
     GENERATED_MANIFEST_PATH: toDockerPath(context.paths.manifestFile),
-    TARGET_AUTH_PATH: toDockerPath(targetAuthPath),
-    OPENCLAW_USE_LOCAL_BUILD: useLocalBuild ? "true" : "false"
+    TARGET_AUTH_PATH: toDockerPath(targetAuthPath)
   };
 }
 
@@ -1209,10 +1153,8 @@ async function dockerCompose(context, args, options = {}) {
   return result;
 }
 
-function buildComposeUpArgs(useLocalBuild) {
-  const args = ["up", "-d", "--wait", "--wait-timeout", "90"];
-  if (useLocalBuild) args.push("--force-recreate");
-  return args;
+function buildComposeUpArgs() {
+  return ["up", "-d", "--wait", "--wait-timeout", "90", "--force-recreate"];
 }
 
 async function ensureLocalRuntimeImageBuilt(context) {
@@ -1375,14 +1317,18 @@ async function dockerPsByComposeProject(projectName, options = {}) {
 
 async function canBindPort(port) {
   try {
-    const server = await new Promise((resolve, reject) => {
-      const next = spawn(process.execPath, ["-e", `const net=require('node:net');const s=net.createServer();s.once('error',()=>process.exit(1));s.listen({host:'127.0.0.1',port:${port},exclusive:true},()=>s.close(()=>process.exit(0)));`], {
-        stdio: "ignore"
+    await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.unref();
+      server.once("error", reject);
+      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-      next.on("error", reject);
-      next.on("close", (code) => resolve(code === 0));
     });
-    return server === true;
+    return true;
   } catch {
     return false;
   }
@@ -1494,8 +1440,7 @@ async function prepareState(context, options = {}) {
       context,
       plugin,
       existingLocalEnv,
-      options,
-      resolveBoolean(localOverrideValue(options.useLocalBuild, ensuredInstance.localEnv.OPENCLAW_USE_LOCAL_BUILD, false), false)
+      options
     ),
     ...ensuredInstance.localEnv
   };
@@ -1503,7 +1448,6 @@ async function prepareState(context, options = {}) {
     await writeEnvFile(context.paths.localEnvFile, localEnv, LOCAL_ENV_HEADER);
   }
   const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
-  const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, localEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnv, options);
   const validationErrors = validateProjectManifest(manifest);
   if (validationErrors.length > 0) {
@@ -1514,8 +1458,8 @@ async function prepareState(context, options = {}) {
   await ensureDir(context.paths.emptyAuthDir);
   await ensureDockerMcpConfig(context);
   await writeJsonFile(context.paths.manifestFile, manifest);
-  await writeTextFile(context.paths.composeFile, renderComposeTemplate({ useLocalBuild }));
-  const runtimeEnv = buildRuntimeEnv(context, plugin, manifest, localEnv, useLocalBuild, detectedCodexAuthPath);
+  await writeTextFile(context.paths.composeFile, renderComposeTemplate({}));
+  const runtimeEnv = buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthPath);
   await writeEnvFile(context.paths.runtimeEnvFile, runtimeEnv);
 
   return {
@@ -1523,7 +1467,6 @@ async function prepareState(context, options = {}) {
     localEnv,
     manifest,
     runtimeEnv,
-    useLocalBuild,
     detectedCodexAuthPath,
     instanceRegistry: ensuredInstance.registry
   };
@@ -1670,37 +1613,6 @@ function summarizeDoctorResults(results) {
     else summary.fail += 1;
     return summary;
   }, { ok: 0, info: 0, warn: 0, fail: 0 });
-}
-
-async function ensureRuntimeImageReady(context, state, options = {}) {
-  let nextState = state;
-  let autoSwitchedToLocalBuild = false;
-
-  if (nextState.useLocalBuild) {
-    return { state: nextState, autoSwitchedToLocalBuild };
-  }
-
-  const defaultStackImage = defaultRuntimeImage();
-  const pull = await dockerCompose(context, ["pull", "openclaw-gateway"], { capture: true });
-  const pullOutput = [pull.stderr, pull.stdout].filter(Boolean).join("\n");
-  if (pull.code === 0) {
-    return { state: nextState, autoSwitchedToLocalBuild };
-  }
-
-  if (!shouldAutoUseLocalBuild({
-    useLocalBuild: nextState.useLocalBuild,
-    stackImage: nextState.localEnv.OPENCLAW_STACK_IMAGE || defaultStackImage,
-    defaultStackImage,
-    errorOutput: pullOutput
-  })) {
-    throw new Error(pullOutput || "Failed to pull the runtime image.");
-  }
-
-  const nextLocalEnv = buildLocalRuntimeEnvOverrides(nextState.localEnv, defaultStackImage, context.localRuntimeImage, context.instanceId);
-  await writeEnvFile(context.paths.localEnvFile, nextLocalEnv, LOCAL_ENV_HEADER);
-  nextState = await prepareState(context, { ...options, useLocalBuild: true });
-  autoSwitchedToLocalBuild = true;
-  return { state: nextState, autoSwitchedToLocalBuild };
 }
 
 async function syncDockerMcpSecrets(context, localEnv) {
@@ -2008,14 +1920,13 @@ async function handleInit(context, options) {
     ? { plugin: basePlugin, localEnv: {} }
     : await promptForInit(context, basePlugin, existingLocalEnv, options, detectedCodexAuthPath);
   const plugin = initState.plugin;
-  const useLocalBuild = resolveBoolean(localOverrideValue(options.useLocalBuild, existingLocalEnv.OPENCLAW_USE_LOCAL_BUILD, false), false);
 
   if (!plugin.acp.defaultAgent) {
     throw new Error("ACP default agent is required. Pass --acp-default-agent in non-interactive mode or rerun init interactively.");
   }
 
   const localEnvValues = {
-    ...buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, useLocalBuild, detectedCodexAuthPath),
+    ...buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, detectedCodexAuthPath),
     ...initState.localEnv
   };
   const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnvValues, options);
@@ -2047,7 +1958,7 @@ async function handleInit(context, options) {
 
   await ensureGitignoreEntries(context.repoRoot);
   const state = await runWithSpinner("Preparing workspace state", () => prepareState(context, options), options);
-  await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample(state.useLocalBuild, {
+  await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample({
     instanceId: context.instanceId,
     gatewayPort: state.localEnv.OPENCLAW_GATEWAY_PORT,
     portManaged: state.localEnv.OPENCLAW_PORT_MANAGED,
@@ -2157,8 +2068,6 @@ async function handleUp(context, options) {
     return;
   }
 
-  const runtimeReady = await runWithSpinner("Checking runtime image", () => ensureRuntimeImageReady(context, state, options), options);
-  state = runtimeReady.state;
   const portState = await detectGatewayPortState(context, state.localEnv);
   if (!portState.ok) {
     throw new Error(`${portState.message} ${state.localEnv.OPENCLAW_PORT_MANAGED === "true" ? "Run `openclaw-repo-agent up --reassign-port` or `openclaw-repo-agent doctor --fix`." : "Edit OPENCLAW_GATEWAY_PORT in .openclaw/local.env."}`);
@@ -2171,16 +2080,14 @@ async function handleUp(context, options) {
     throw new Error(`Telegram bot token is already in use by another running repo instance: ${details}. Use a separate bot token per repo.`);
   }
   await runWithSpinner("Validating Telegram bot token", () => ensureTelegramBotTokenReady(context, state), options);
-  if (state.useLocalBuild) {
-    await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
-  }
-  await runWithSpinner("Starting OpenClaw stack", () => dockerCompose(context, buildComposeUpArgs(state.useLocalBuild)), options);
+  await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
+  await runWithSpinner("Starting OpenClaw stack", () => dockerCompose(context, buildComposeUpArgs()), options);
   const dashboardUrl = await runWithSpinner("Resolving dashboard URL", () => resolveDashboardUrl(context), options);
   printCommandReport("success", "Up complete", [
     { label: "Repo", value: context.repoRoot },
     { label: "Dashboard", value: dashboardUrl },
     { label: "Deployment", value: state.manifest.deploymentProfile },
-    { label: "Runtime image", value: state.useLocalBuild ? context.localRuntimeImage : (state.localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage()) }
+    { label: "Runtime image", value: context.localRuntimeImage }
   ], [
     buildStatusSection("Integrations", "info", [
       {
@@ -2188,10 +2095,6 @@ async function handleUp(context, options) {
         icon: mcp.profileActive && codexTargetsRepoConfig(mcp) ? "✔" : "ℹ",
         text: `Docker MCP: ${mcp.profileActive && codexTargetsRepoConfig(mcp) ? "active for this repo" : "ready but inactive"}`
       }
-    ]),
-    buildStatusSection("Warnings", "warning", [
-      runtimeReady.autoSwitchedToLocalBuild ? "Remote runtime image was unavailable. Falling back to a local runtime build." : "",
-      runtimeReady.autoSwitchedToLocalBuild ? `Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.` : ""
     ]),
     buildNextStepsSection(!mcp.profileActive || !codexTargetsRepoConfig(mcp)
       ? [`Docker MCP profile ${context.dockerMcpProfile} is ready but inactive. Run \`${PRODUCT_NAME} mcp use\` when you want Codex to target this repo.`]
@@ -2499,7 +2402,7 @@ async function handlePair(context, options) {
   await writeEnvFile(
     context.paths.localEnvFile,
     {
-      ...buildLocalEnvTemplateValues(context, plugin, localEnv, options, resolveBoolean(localEnv.OPENCLAW_USE_LOCAL_BUILD, false)),
+      ...buildLocalEnvTemplateValues(context, plugin, localEnv, options),
       ...localEnv
     },
     LOCAL_ENV_HEADER
@@ -2731,18 +2634,13 @@ async function handleDoctor(context, options) {
     manifestErrors.length === 0 ? "" : "Run `openclaw-repo-agent config validate` and fix the reported fields."
   );
 
-  if (!state.useLocalBuild) {
-    const pull = await dockerCompose(context, ["pull", "openclaw-gateway"], { capture: true });
-    pushCheck(
-      results,
-      "runtime-image",
-      pull.code === 0,
-      pull.code === 0 ? "Runtime image is available." : pull.stderr.trim() || pull.stdout.trim() || "Failed to pull runtime image.",
-      pull.code === 0 ? "" : "Run `openclaw-repo-agent up` to auto-fallback to a local build, or set OPENCLAW_USE_LOCAL_BUILD=true."
-    );
-  } else {
-    pushCheck(results, "runtime-image", true, "Local runtime build mode is enabled.");
-  }
+  pushCheck(
+    results,
+    "runtime-image",
+    true,
+    `Runtime image is managed locally as ${context.localRuntimeImage}.`,
+    "Run `openclaw-repo-agent up` or `openclaw-repo-agent update` to rebuild it."
+  );
 
   let running = await gatewayRunning(context);
   const portStateBeforeFix = await detectGatewayPortState(context, state.localEnv);
@@ -2840,16 +2738,6 @@ async function handleDoctor(context, options) {
       workspaceAccess.code === 0 ? "Workspace and manifest mounts are readable." : "Workspace or manifest mount is not readable inside the container.",
       workspaceAccess.code === 0 ? "" : "Check TARGET_REPO_PATH and GENERATED_MANIFEST_PATH in the rendered runtime env."
     );
-
-    const healthz = await openclawGatewayCommand(context, ["health", "--json"], { capture: true });
-    const gatewayHealthPayload = healthz.code === 0 ? parseJsonOutput(healthz.stdout, null) : null;
-    pushCheck(
-      results,
-      "health",
-      healthz.code === 0,
-      healthz.code === 0 ? summarizeOpenClawHealthPayload(gatewayHealthPayload) : "Gateway health check failed.",
-      healthz.code === 0 ? "" : "Inspect `docker compose logs -f openclaw-gateway` for runtime failures."
-    );
   }
 
   const ok = results.every((result) => result.ok || result.level !== "error");
@@ -2883,8 +2771,6 @@ async function handleUpdate(context, options) {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
   }), options);
-  const runtimeReady = await runWithSpinner("Checking runtime image", () => ensureRuntimeImageReady(context, state, options), options);
-  state = runtimeReady.state;
   const legacyContainers = await detectLegacyComposeProject(context);
   if (legacyContainers.length > 0) {
     await dockerCompose({
@@ -2893,22 +2779,18 @@ async function handleUpdate(context, options) {
     }, ["down", "--remove-orphans"]);
   }
   if (await gatewayRunning(context)) {
-    if (state.useLocalBuild) {
-      await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
-    }
-    await runWithSpinner("Refreshing running stack", () => dockerCompose(context, buildComposeUpArgs(state.useLocalBuild)), options);
+    await runWithSpinner("Building local runtime image", () => ensureLocalRuntimeImageBuilt(context), options);
+    await runWithSpinner("Refreshing running stack", () => dockerCompose(context, buildComposeUpArgs()), options);
   }
   await handleDoctor(context, { ...options, verify: false });
   if (!options.json) {
     printCommandReport("success", "Update complete", [
       { label: "Repo", value: context.repoRoot },
       { label: "Gateway", value: buildDashboardUrl(state.localEnv.OPENCLAW_GATEWAY_PORT) },
-      { label: "Runtime image", value: state.useLocalBuild ? context.localRuntimeImage : (state.localEnv.OPENCLAW_STACK_IMAGE || defaultRuntimeImage()) },
+      { label: "Runtime image", value: context.localRuntimeImage },
       { label: "Legacy cleanup", value: legacyContainers.length > 0 ? "completed" : "not needed" }
     ], [
       buildStatusSection("Warnings", "warning", [
-        runtimeReady.autoSwitchedToLocalBuild ? "Remote runtime image was unavailable. Falling back to a local runtime build." : "",
-        runtimeReady.autoSwitchedToLocalBuild ? `Saved OPENCLAW_USE_LOCAL_BUILD=true in ${path.relative(context.repoRoot, context.paths.localEnvFile)}.` : "",
         legacyContainers.length > 0 ? `Cleaned up legacy compose project ${context.legacyComposeProjectName}.` : ""
       ])
     ].filter(Boolean));
@@ -2958,10 +2840,6 @@ async function handleMcpUse(context, options) {
   ], [
     buildNextStepsSection(["Restart Codex if it is already running."])
   ]);
-}
-
-async function handleMcpConnect(context, options) {
-  return await handleMcpUse(context, options);
 }
 
 async function handleMcpStatus(context, options) {
@@ -3100,7 +2978,6 @@ Commands:
   mcp setup        Prepare this repo's Docker MCP config and sync secrets
   mcp use          Activate this repo's Docker MCP config for Codex
   mcp status       Show Docker MCP status for this repo
-  mcp connect      Compatibility alias for mcp use
   config validate  Validate the repo plugin and rendered manifest
   config migrate   Rewrite plugin.json using current defaults
 
@@ -3169,7 +3046,6 @@ export async function main(argv) {
   if (command === "mcp" && subcommand === "setup") return await handleMcpSetup(context, parsed.options);
   if (command === "mcp" && subcommand === "status") return await handleMcpStatus(context, parsed.options);
   if (command === "mcp" && subcommand === "use") return await handleMcpUse(context, parsed.options);
-  if (command === "mcp" && subcommand === "connect") return await handleMcpConnect(context, parsed.options);
   if (command === "config" && subcommand === "validate") return await handleConfigValidate(context, parsed.options);
   if (command === "config" && subcommand === "migrate") return await handleConfigMigrate(context, parsed.options);
 

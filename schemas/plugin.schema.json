@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/openclaw/plugin.schema.json",
+  "$id": "https://github.com/AndriiTeterka/openclaw-repo-agent/blob/main/schemas/plugin.schema.json",
   "title": "OpenClaw Repo Plugin Config",
   "type": "object",
   "additionalProperties": true,

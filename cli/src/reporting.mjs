@@ -1,14 +1,12 @@
 import { Chalk } from "chalk";
-import figures from "figures";
-import logSymbols from "log-symbols";
 import stringWidth from "string-width";
 
 const DEFAULT_LABEL_WIDTH = 14;
 const SECTION_ICON_WIDTH = 2;
 const SUCCESS_ICON = "✔";
-const INFO_ICON = figures.pointerSmall;
+const INFO_ICON = "›";
 const WARNING_ICON = "▲";
-const ERROR_ICON = logSymbols.error.replace(/\u001b\[[0-9;]*m/g, "") || figures.cross;
+const ERROR_ICON = "✖";
 const PLAIN_STATUS_ICONS = {
   success: SUCCESS_ICON,
   warning: WARNING_ICON,

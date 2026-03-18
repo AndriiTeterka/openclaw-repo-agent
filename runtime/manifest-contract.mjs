@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { deepMerge, parseStringArrayEnv, resolveBoolean, resolveInteger } from "./shared.mjs";
+import { deepMerge, isPlainObject, normalizePrincipalArray, parseStringArrayEnv, resolveBoolean, resolveInteger, uniqueStrings } from "./shared.mjs";
 import {
   formatSupportedAcpAgents,
   isSupportedAcpAgent,
@@ -133,10 +133,6 @@ const RUNTIME_PROFILE_PRESETS = {
   },
 };
 
-function isObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function nonEmptyString(value, fallback = "") {
   const trimmed = String(value ?? "").trim();
   return trimmed || fallback;
@@ -147,29 +143,12 @@ function toStringArray(value, fallback = []) {
   return value.map((entry) => String(entry ?? "").trim()).filter(Boolean);
 }
 
-function uniqueStrings(values) {
-  return [...new Set(values.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
-}
-
-function normalizeTelegramPrincipal(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  if (raw === "*") return raw;
-  if (/^tg:/i.test(raw) || /^telegram:/i.test(raw) || raw.startsWith("@")) return raw;
-  if (/^-?\d+$/.test(raw)) return `tg:${raw}`;
-  return raw;
-}
-
-function normalizePrincipalArray(value) {
-  return uniqueStrings(toStringArray(value).map((entry) => normalizeTelegramPrincipal(entry)));
-}
-
 function defaultAgentName(projectName) {
   const normalizedProjectName = String(projectName ?? "").trim();
   return normalizedProjectName ? `${normalizedProjectName} Workspace` : "Workspace";
 }
 
-function defaultDeploymentProfile(hostPlatform = os.platform()) {
+export function defaultDeploymentProfile(hostPlatform = os.platform()) {
   return hostPlatform === "win32" ? "wsl2" : "docker-local";
 }
 
@@ -186,7 +165,7 @@ function getRuntimePreset(name) {
 }
 
 function normalizeGroups(value, fallback) {
-  if (!isObject(value)) return deepMerge(fallback);
+  if (!isPlainObject(value)) return deepMerge(fallback);
   return deepMerge(fallback, value);
 }
 
@@ -217,22 +196,22 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   ]);
   const verificationCommands = uniqueStrings(toStringArray(rawManifest.verificationCommands, []));
 
-  const security = deepMerge(runtimePreset.security, isObject(rawManifest.security) ? rawManifest.security : {});
-  const agent = deepMerge(runtimePreset.agent, isObject(rawManifest.agent) ? rawManifest.agent : {});
-  const telegramInput = isObject(rawManifest.telegram) ? rawManifest.telegram : {};
+  const security = deepMerge(runtimePreset.security, isPlainObject(rawManifest.security) ? rawManifest.security : {});
+  const agent = deepMerge(runtimePreset.agent, isPlainObject(rawManifest.agent) ? rawManifest.agent : {});
+  const telegramInput = isPlainObject(rawManifest.telegram) ? rawManifest.telegram : {};
   const telegram = deepMerge(runtimePreset.telegram, telegramInput);
-  const acp = deepMerge(runtimePreset.acp, isObject(rawManifest.acp) ? rawManifest.acp : {});
-  const queue = deepMerge(queuePreset, isObject(rawManifest.queue) ? rawManifest.queue : {});
-  const messages = deepMerge(runtimePreset.messages, isObject(rawManifest.messages) ? rawManifest.messages : {});
-  const tools = deepMerge(runtimePreset.tools, isObject(rawManifest.tools) ? rawManifest.tools : {});
+  const acp = deepMerge(runtimePreset.acp, isPlainObject(rawManifest.acp) ? rawManifest.acp : {});
+  const queue = deepMerge(queuePreset, isPlainObject(rawManifest.queue) ? rawManifest.queue : {});
+  const messages = deepMerge(runtimePreset.messages, isPlainObject(rawManifest.messages) ? rawManifest.messages : {});
+  const tools = deepMerge(runtimePreset.tools, isPlainObject(rawManifest.tools) ? rawManifest.tools : {});
 
   const allowedAgents = uniqueStrings([
     ...toStringArray(acp.allowedAgents, []).map((value) => normalizeAcpAgentValue(value)),
     ...toStringArray(acp.defaultAgent ? [acp.defaultAgent] : [], []).map((value) => normalizeAcpAgentValue(value)),
   ]);
 
-  telegram.allowFrom = normalizePrincipalArray(telegram.allowFrom);
-  telegram.groupAllowFrom = normalizePrincipalArray(telegram.groupAllowFrom);
+  telegram.allowFrom = normalizePrincipalArray(toStringArray(telegram.allowFrom));
+  telegram.groupAllowFrom = normalizePrincipalArray(toStringArray(telegram.groupAllowFrom));
   telegram.proxy = nonEmptyString(telegram.proxy, "");
   telegram.groups = normalizeGroups(telegram.groups, runtimePreset.telegram?.groups ?? {});
   telegram.threadBindings = {
@@ -241,8 +220,7 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   telegram.network = {
     autoSelectFamily: resolveBoolean(telegram.network?.autoSelectFamily, true),
   };
-  telegram.streamMode = nonEmptyString(telegram.streamMode ?? telegram.streaming, "partial");
-  delete telegram.streaming;
+  telegram.streamMode = nonEmptyString(telegram.streamMode, "partial");
 
   agent.id = nonEmptyString(agent.id, "workspace");
   agent.name = nonEmptyString(agent.name, defaultAgentName(projectName));
@@ -396,10 +374,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
 
   const telegramDmPolicy = nonEmptyString(env.OPENCLAW_TELEGRAM_DM_POLICY, manifest.telegram.dmPolicy);
   const telegramGroupPolicy = nonEmptyString(env.OPENCLAW_TELEGRAM_GROUP_POLICY, manifest.telegram.groupPolicy);
-  const telegramStreamMode = nonEmptyString(
-    env.OPENCLAW_TELEGRAM_STREAM_MODE,
-    nonEmptyString(env.OPENCLAW_TELEGRAM_STREAMING, manifest.telegram.streamMode),
-  );
+  const telegramStreamMode = nonEmptyString(env.OPENCLAW_TELEGRAM_STREAM_MODE, manifest.telegram.streamMode);
   const telegramBlockStreaming = resolveBoolean(env.OPENCLAW_TELEGRAM_BLOCK_STREAMING, manifest.telegram.blockStreaming);
   const telegramReplyToMode = nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, manifest.telegram.replyToMode);
   const telegramReactionLevel = nonEmptyString(env.OPENCLAW_TELEGRAM_REACTION_LEVEL, manifest.telegram.reactionLevel);

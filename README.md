@@ -36,8 +36,8 @@ npx openclaw-repo-agent mcp use
 These assets are included in the source repository, but they are not part of the published npm tarball:
 
 - A reusable plugin validation action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin)
-- A generic example consumer repo under [`examples/custom`](examples/custom)
-- Release automation for npm and GHCR under [`.github/workflows`](.github/workflows)
+- A generic example consumer repo under [`test/fixtures/custom`](test/fixtures/custom)
+- Release automation for npm under [`.github/workflows`](.github/workflows)
 
 ## First-Time User Flow
 
@@ -51,7 +51,7 @@ npx openclaw-repo-agent pair
 
 `init` and `up` now prepare repo-local Docker MCP state and sync configured credentials into Docker MCP secrets, but they no longer repoint Docker MCP/Codex globally. Use `mcp use` explicitly when you want Codex to target the current repo.
 
-If the default prebuilt runtime image is unavailable, `up` automatically falls back to a local runtime build and persists that choice in `.openclaw/local.env`.
+`up` now always builds the repo-local runtime image for the current instance and persists that instance-specific tag in `.openclaw/local.env`.
 
 Run `pair` after opening the dashboard or messaging the Telegram bot to approve the latest pending local gateway/device and Telegram pairing requests.
 
@@ -79,7 +79,7 @@ Each initialized repo also gets a stable isolated runtime identity:
 
 - `OPENCLAW_INSTANCE_ID` is derived from the repo path
 - `OPENCLAW_GATEWAY_PORT` is auto-managed from a per-repo range by default
-- local runtime builds use an instance-specific image tag
+- the runtime uses an instance-specific local image tag
 - Docker Compose uses an instance-specific project name
 
 Configuration precedence:
@@ -103,7 +103,6 @@ Configuration precedence:
 - `mcp setup`: prepare or refresh this repo's Docker MCP config and sync Docker MCP secrets
 - `mcp use`: activate this repo's Docker MCP config for Codex
 - `mcp status`: show whether this repo's Docker MCP config is active and whether Codex is targeting it
-- `mcp connect`: compatibility alias for `mcp use`
 - `config validate`: validate `.openclaw/plugin.json` as rendered into the project manifest
 - `config migrate`: rewrite `.openclaw/plugin.json` using the current CLI defaults
 
@@ -178,7 +177,6 @@ npx openclaw-repo-agent pair --gateway-url ws://gateway.example/ws --gateway-tok
 Notes:
 
 - `mcp use` changes Docker MCP's active config pointer globally because Codex currently only supports global Docker MCP integration
-- `mcp connect` is kept as an alias to `mcp use` during migration
 - `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/local.env` and rerunning `init`, `up`, or `mcp setup`
 - `context7` is enabled permanently for version-specific documentation lookup
 - browser automation in this project should always use `playwright-cli`
@@ -221,16 +219,15 @@ Validate a consumer repo manually:
 node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root /path/to/repo --product-root .
 ```
 
-Build the runtime locally during development:
+Build and start the local runtime during development:
 
 ```bash
-node ./cli/bin/openclaw-repo-agent.mjs init --repo-root /path/to/repo --product-root . --use-local-build
+node ./cli/bin/openclaw-repo-agent.mjs up --repo-root /path/to/repo --product-root .
 ```
 
 ## Release Model
 
 - npm package: `openclaw-repo-agent`
-- runtime images: `ghcr.io/andriiteterka/openclaw-repo-agent-runtime`
 - release tags: `vX.Y.Z`
 
 npm publishing is configured for GitHub Actions trusted publishing via [`.github/workflows/release.yml`](.github/workflows/release.yml). Before the first release, configure the npm package to trust this repository/workflow on npm. No `NPM_TOKEN` repository secret is needed for package publishing.

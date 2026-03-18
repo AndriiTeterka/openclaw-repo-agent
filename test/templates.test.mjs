@@ -24,7 +24,9 @@ test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", 
 });
 
 test("defaultLocalEnvExample documents MCP credential sync", () => {
-  const output = defaultLocalEnvExample(false);
+  const output = defaultLocalEnvExample({
+    stackImage: "openclaw-repo-agent-runtime:0.4.0-demo"
+  });
 
   assert.match(output, /\.openclaw\/ is git-ignored by default/);
   assert.match(output, /mirror configured API-style credentials into Docker MCP secrets automatically/);
@@ -32,12 +34,16 @@ test("defaultLocalEnvExample documents MCP credential sync", () => {
   assert.match(output, /GITHUB_PERSONAL_ACCESS_TOKEN=/);
   assert.match(output, /OPENCLAW_INSTANCE_ID=/);
   assert.match(output, /OPENCLAW_PORT_MANAGED=true/);
+  assert.match(output, /OPENCLAW_STACK_IMAGE=openclaw-repo-agent-runtime:0\.4\.0-demo/);
+  assert.doesNotMatch(output, /OPENCLAW_USE_LOCAL_BUILD=/);
 });
 
-test("renderComposeTemplate uses labels instead of a custom container name", () => {
-  const output = renderComposeTemplate({ useLocalBuild: false });
+test("renderComposeTemplate always includes the managed runtime build", () => {
+  const output = renderComposeTemplate({});
 
   assert.doesNotMatch(output, /container_name:/);
+  assert.match(output, /x-openclaw-build: &openclaw-build/);
+  assert.match(output, /build: \*openclaw-build/);
   assert.match(output, /openclaw\.instance-id: \$\{OPENCLAW_INSTANCE_ID\}/);
   assert.match(output, /openclaw\.compose-project: \$\{OPENCLAW_COMPOSE_PROJECT_NAME\}/);
   assert.match(output, /127\.0\.0\.1:\$\{OPENCLAW_GATEWAY_PORT\}:\$\{OPENCLAW_GATEWAY_PORT\}/);
