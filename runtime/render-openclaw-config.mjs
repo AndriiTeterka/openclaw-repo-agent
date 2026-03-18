@@ -1,7 +1,7 @@
 import {
+  buildManifestFromEnv,
   buildManifestStatus,
   buildOpenClawConfig,
-  normalizeProjectManifest,
   validateProjectManifest,
 } from "./manifest-contract.mjs";
 import {
@@ -59,14 +59,10 @@ function buildStatus({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const manifestPath = process.env.OPENCLAW_PROJECT_MANIFEST?.trim() || "/config/project-manifest.json";
   const configPath = process.env.OPENCLAW_RENDERED_CONFIG_PATH?.trim() || "/home/node/.openclaw/openclaw.json";
   const renderStatusPath = process.env.OPENCLAW_RENDER_STATUS_PATH?.trim() || "/home/node/.openclaw/runtime/render-status.json";
 
-  const rawManifest = await readJsonFile(manifestPath, {});
-  const manifest = normalizeProjectManifest(rawManifest, {
-    hostPlatform: process.env.OPENCLAW_HOST_PLATFORM,
-  });
+  const manifest = buildManifestFromEnv(process.env);
   const validationErrors = validateProjectManifest(manifest);
   const manifestStatus = buildManifestStatus(manifest, validationErrors);
   const currentConfig = await readJsonFile(configPath, null);
@@ -96,7 +92,7 @@ async function main() {
   const renderErrors = validateRenderedConfig(nextConfig);
   const status = buildStatus({
     manifestStatus,
-    manifestPath,
+    manifestPath: "(env)",
     configPath,
     previousConfig: currentConfig,
     nextConfig,

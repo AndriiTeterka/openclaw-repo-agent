@@ -210,6 +210,7 @@ export function buildRegistryEntry(context, localEnv = {}) {
     repoSlug: context.repoSlug,
     composeProjectName: context.composeProjectName,
     gatewayPort: String(localEnv.OPENCLAW_GATEWAY_PORT ?? ""),
+    gatewayToken: String(localEnv.OPENCLAW_GATEWAY_TOKEN ?? ""),
     portManaged: shouldManageGatewayPort(localEnv),
     telegramTokenHash: fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN),
     localRuntimeImage: context.localRuntimeImage,

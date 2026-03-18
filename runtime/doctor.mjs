@@ -1,5 +1,5 @@
 import { probeAuth } from "./bootstrap-auth.mjs";
-import { buildManifestStatus, normalizeProjectManifest, validateProjectManifest } from "./manifest-contract.mjs";
+import { buildManifestFromEnv, buildManifestStatus, validateProjectManifest } from "./manifest-contract.mjs";
 import { readJsonFile } from "./shared.mjs";
 
 function parseArgs(argv) {
@@ -10,13 +10,9 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const manifestPath = process.env.OPENCLAW_PROJECT_MANIFEST?.trim() || "/config/project-manifest.json";
   const renderStatusPath = process.env.OPENCLAW_RENDER_STATUS_PATH?.trim() || "/home/node/.openclaw/runtime/render-status.json";
 
-  const rawManifest = await readJsonFile(manifestPath, {});
-  const manifest = normalizeProjectManifest(rawManifest, {
-    hostPlatform: process.env.OPENCLAW_HOST_PLATFORM,
-  });
+  const manifest = buildManifestFromEnv(process.env);
   const manifestErrors = validateProjectManifest(manifest);
   const renderStatus = await readJsonFile(renderStatusPath, null);
   const auth = await probeAuth({ probeOnly: true });

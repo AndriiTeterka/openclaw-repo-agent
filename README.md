@@ -51,7 +51,7 @@ npx openclaw-repo-agent pair
 
 `init` and `up` now prepare repo-local Docker MCP state and sync configured credentials into Docker MCP secrets, but they no longer repoint Docker MCP/Codex globally. Use `mcp use` explicitly when you want Codex to target the current repo.
 
-`up` now always builds the repo-local runtime image for the current instance and persists that instance-specific tag in `.openclaw/local.env`.
+`up` now always builds the repo-local runtime image for the current instance and persists that instance-specific tag in the instance registry.
 
 Run `pair` after opening the dashboard or messaging the Telegram bot to approve the latest pending local gateway/device and Telegram pairing requests.
 
@@ -66,12 +66,12 @@ Telegram defaults remain repo-local and silent during bootstrap:
 - Telegram DM policy: `pairing`
 - Telegram group policy: `disabled`
 
-You can still override detected repo settings and Telegram policy later in `.openclaw/plugin.json`, `.openclaw/local.env`, or with CLI flags.
+You can still override detected repo settings and Telegram policy later in `.openclaw/config.json` or with CLI flags.
 
 The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
 
-- repo config files: `.openclaw/plugin.json`, `.openclaw/local.env.example`
-- local runtime files: `.openclaw/local.env`, `.openclaw/state/`
+- repo config files: `.openclaw/config.json`, `.openclaw/secrets.env`
+- generated runtime files: `.openclaw/state/`
 
 If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
 
@@ -85,9 +85,8 @@ Each initialized repo also gets a stable isolated runtime identity:
 Configuration precedence:
 
 1. CLI flags
-2. `.openclaw/local.env`
-3. `.openclaw/plugin.json`
-4. built-in defaults
+2. `.openclaw/config.json`
+3. built-in defaults
 
 ## Command Reference
 
@@ -103,8 +102,8 @@ Configuration precedence:
 - `mcp setup`: prepare or refresh this repo's Docker MCP config and sync Docker MCP secrets
 - `mcp use`: activate this repo's Docker MCP config for Codex
 - `mcp status`: show whether this repo's Docker MCP config is active and whether Codex is targeting it
-- `config validate`: validate `.openclaw/plugin.json` as rendered into the project manifest
-- `config migrate`: rewrite `.openclaw/plugin.json` using the current CLI defaults
+- `config validate`: validate `.openclaw/config.json` as rendered into the runtime env
+- `config migrate`: rewrite `.openclaw/config.json` using the current CLI defaults
 
 Run `npx openclaw-repo-agent --help` for the current command summary.
 
@@ -125,19 +124,18 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 ## Local Configuration Notes
 
 - `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
-- `.openclaw/local.env` is the user-editable local override file; `.openclaw/state/runtime.env` is generated and should not be edited directly.
-- `.openclaw/local.env` now stores `OPENCLAW_INSTANCE_ID` and `OPENCLAW_PORT_MANAGED` so repo instances can be tracked and reallocated safely.
-- `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` still live in `.openclaw/local.env` for the OpenClaw runtime, but `init`/`up` mirror them into Docker MCP secrets automatically.
-- `GITHUB_PERSONAL_ACCESS_TOKEN` is optional in `.openclaw/local.env`; when present it is synced to Docker MCP as `github.personal_access_token` for `github-official`.
-- Telegram stream mode is configured with `OPENCLAW_TELEGRAM_STREAM_MODE` in `.openclaw/local.env`.
-- `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains local because it is a host path, not a keychain secret.
+- `.openclaw/config.json` holds all non-secret configuration (project name, deployment profile, ACP agent, Telegram policy, etc.).
+- `.openclaw/secrets.env` holds secrets only: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `TARGET_AUTH_PATH`. `init`/`up` mirror them into Docker MCP secrets automatically.
+- `.openclaw/state/runtime.env` is generated from config + secrets + instance registry and should not be edited directly.
+- Instance identity (`OPENCLAW_INSTANCE_ID`, `OPENCLAW_GATEWAY_PORT`) is managed by the instance registry; use `up --reassign-port` or `doctor --fix` to change the gateway port.
+- `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains in secrets.env because it is a host path, not a keychain secret.
 - `OPENCLAW_GATEWAY_BIND=lan` is intentional in the generated Docker setup so bridge traffic can reach the gateway inside the container; the generated Compose file still publishes the host port on `127.0.0.1` only unless you change the port mapping.
 - If the ACP default agent is `codex`, the repo agent defaults the workspace model to `openai-codex/gpt-5.4` and automatically reuses `CODEX_HOME` or `~/.codex` when `auth.json` is present there.
 - The runtime image installs the official Codex CLI, so container-side auth bootstrap no longer depends on the OpenClaw base image shipping `codex`.
 - The runtime image also preinstalls `playwright-cli`, Chromium, and Playwright's Linux browser dependencies, seeds Playwright CLI to use bundled Chromium by default, removes stale `npx playwright` cache state on startup, reroutes both `playwright` and `npx playwright` back to `playwright-cli`, and treats `playwright-cli` as the only supported browser automation entrypoint for this project.
 - Playwright CLI workspace config lives under `.openclaw/playwright/`. Normal CLI responses stay on stdout instead of auto-generating page or console files; explicit saved artifacts go under `.openclaw/playwright/artifacts/`.
 - Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.
-- The generated runtime manifest lives at `.openclaw/state/project-manifest.json`.
+- The generated runtime env lives at `.openclaw/state/runtime.env`; the container receives all config via env vars.
 - The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
 - Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
 - The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
@@ -177,7 +175,7 @@ npx openclaw-repo-agent pair --gateway-url ws://gateway.example/ws --gateway-tok
 Notes:
 
 - `mcp use` changes Docker MCP's active config pointer globally because Codex currently only supports global Docker MCP integration
-- `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/local.env` and rerunning `init`, `up`, or `mcp setup`
+- `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/secrets.env` and rerunning `init`, `up`, or `mcp setup`
 - `context7` is enabled permanently for version-specific documentation lookup
 - browser automation in this project should always use `playwright-cli`
 - the repo-local Docker MCP config only scopes filesystem access for this repo; the other recommended servers do not need per-repo config
@@ -244,4 +242,4 @@ The GitHub Actions workflows in [`.github/workflows`](.github/workflows) are alr
 
 ## Optional Consumer Validation
 
-If a consumer repo chooses to commit `.openclaw/plugin.json`, it can validate that file with the reusable action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin).
+If a consumer repo chooses to commit `.openclaw/config.json`, it can validate that file with the reusable action under [`.github/actions/validate-plugin`](.github/actions/validate-plugin).

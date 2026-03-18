@@ -43,7 +43,6 @@ import {
 } from "./builtin-profiles.mjs";
 import {
   defaultInstructionsTemplate,
-  defaultLocalEnvExample,
   renderDockerMcpConfigTemplate,
   renderComposeTemplate
 } from "./templates.mjs";
@@ -122,15 +121,13 @@ const STRING_FLAGS = new Set([
 ]);
 
 const DEFAULT_STATE_COMPOSE_FILE = "docker-compose.openclaw.yml";
-const DEFAULT_STATE_MANIFEST_FILE = "project-manifest.json";
 const DEFAULT_STATE_ENV_FILE = "runtime.env";
 const DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE = "docker-mcp.config.yaml";
 const DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE = "docker-mcp.secrets.json";
-const DEFAULT_LOCAL_ENV_FILE = "local.env";
-const DEFAULT_LOCAL_ENV_EXAMPLE_FILE = "local.env.example";
-const DEFAULT_PLUGIN_FILE = "plugin.json";
+const DEFAULT_CONFIG_FILE = "config.json";
+const DEFAULT_SECRETS_ENV_FILE = "secrets.env";
 const DEFAULT_INSTRUCTIONS_FILE = "instructions.md";
-const LOCAL_ENV_HEADER = "Local-only OpenClaw configuration. Keep this file out of git.";
+const SECRETS_ENV_HEADER = "OpenClaw secrets. Keep this file out of git.";
 
 export const ACP_AGENT_CHOICES = [
   { value: "codex", label: "codex" },
@@ -173,28 +170,28 @@ async function updateInstanceRegistry(context, localEnv = {}) {
   return await upsertInstanceRegistryEntry(context.instanceRegistryFile, buildRegistryEntry(context, localEnv));
 }
 
-async function ensureInstanceLocalEnv(context, localEnv, options = {}) {
-  const nextLocalEnv = {
-    ...localEnv,
-    OPENCLAW_STACK_IMAGE: String(context.localRuntimeImage ?? "").trim(),
-  };
-  const changes = [];
+async function ensureInstanceLocalEnv(context, instanceEnv, options = {}) {
   const registry = await readInstanceRegistry(context.instanceRegistryFile);
   const registryEntries = listInstanceRegistryEntries(registry);
+  const existingEntry = registryEntries.find((e) => String(e?.instanceId ?? "") === context.instanceId);
 
-  if (String(nextLocalEnv.OPENCLAW_INSTANCE_ID ?? "").trim() !== context.instanceId) {
-    nextLocalEnv.OPENCLAW_INSTANCE_ID = context.instanceId;
-    changes.push("set OPENCLAW_INSTANCE_ID");
-  }
+  const nextLocalEnv = {
+    ...instanceEnv,
+    OPENCLAW_STACK_IMAGE: String(context.localRuntimeImage ?? "").trim(),
+    OPENCLAW_INSTANCE_ID: context.instanceId,
+    OPENCLAW_GATEWAY_PORT: String(instanceEnv.OPENCLAW_GATEWAY_PORT ?? existingEntry?.gatewayPort ?? LEGACY_COMPOSE_PORT).trim(),
+    OPENCLAW_PORT_MANAGED: String(instanceEnv.OPENCLAW_PORT_MANAGED ?? (existingEntry?.portManaged ? "true" : "false")).trim(),
+    OPENCLAW_GATEWAY_TOKEN: String(instanceEnv.OPENCLAW_GATEWAY_TOKEN ?? existingEntry?.gatewayToken ?? "").trim() || randomToken(),
+    OPENCLAW_GATEWAY_BIND: String(instanceEnv.OPENCLAW_GATEWAY_BIND ?? "lan").trim(),
+    OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: String(instanceEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS ?? "").trim(),
+  };
 
+  const changes = [];
   let portManaged = shouldManageGatewayPort(nextLocalEnv);
   if (options.reassignPort) {
     portManaged = true;
   }
-  if (String(nextLocalEnv.OPENCLAW_PORT_MANAGED ?? "").trim() !== String(portManaged)) {
-    nextLocalEnv.OPENCLAW_PORT_MANAGED = portManaged ? "true" : "false";
-    changes.push("set OPENCLAW_PORT_MANAGED");
-  }
+  nextLocalEnv.OPENCLAW_PORT_MANAGED = portManaged ? "true" : "false";
 
   const currentPort = Number.parseInt(String(nextLocalEnv.OPENCLAW_GATEWAY_PORT ?? "").trim(), 10);
   if (portManaged && (options.reassignPort || !Number.isInteger(currentPort) || currentPort === LEGACY_COMPOSE_PORT)) {
@@ -697,12 +694,10 @@ function resolvePaths(repoRoot) {
   return {
     openclawDir,
     stateDir,
-    pluginFile: path.join(openclawDir, DEFAULT_PLUGIN_FILE),
+    configFile: path.join(openclawDir, DEFAULT_CONFIG_FILE),
     instructionsFile: path.join(openclawDir, DEFAULT_INSTRUCTIONS_FILE),
-    localEnvFile: path.join(openclawDir, DEFAULT_LOCAL_ENV_FILE),
-    localEnvExampleFile: path.join(openclawDir, DEFAULT_LOCAL_ENV_EXAMPLE_FILE),
+    secretsEnvFile: path.join(openclawDir, DEFAULT_SECRETS_ENV_FILE),
     composeFile: path.join(stateDir, DEFAULT_STATE_COMPOSE_FILE),
-    manifestFile: path.join(stateDir, DEFAULT_STATE_MANIFEST_FILE),
     runtimeEnvFile: path.join(stateDir, DEFAULT_STATE_ENV_FILE),
     dockerMcpConfigFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_CONFIG_FILE),
     dockerMcpSecretsFile: path.join(stateDir, DEFAULT_STATE_DOCKER_MCP_SECRETS_FILE),
@@ -963,72 +958,6 @@ function buildEffectiveManifest(plugin, repoRoot, localEnv, options = {}) {
   });
 }
 
-function buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, defaultTargetAuthPath = "") {
-  const defaults = {
-    OPENCLAW_STACK_IMAGE: context.localRuntimeImage,
-    OPENCLAW_IMAGE: DEFAULT_OPENCLAW_IMAGE,
-    OPENCLAW_AGENT_NPM_PACKAGES: "",
-    OPENCLAW_AGENT_INSTALL_COMMAND: "",
-    OPENCLAW_TOOLING_PROFILE: "",
-    OPENCLAW_TOOLING_INSTALL_COMMAND: "",
-    OPENCLAW_DEPLOYMENT_PROFILE: "",
-    OPENCLAW_RUNTIME_PROFILE: "",
-    OPENCLAW_QUEUE_PROFILE: "",
-    OPENCLAW_BOOTSTRAP_AUTH_MODE: "",
-    OPENCLAW_AGENT_DEFAULT_MODEL: "",
-    OPENCLAW_ACP_DEFAULT_AGENT: "",
-    OPENCLAW_ACP_ALLOWED_AGENTS: "",
-    OPENCLAW_TELEGRAM_DM_POLICY: "",
-    OPENCLAW_TELEGRAM_GROUP_POLICY: "",
-    OPENCLAW_TELEGRAM_STREAM_MODE: "",
-    OPENCLAW_TELEGRAM_BLOCK_STREAMING: "",
-    OPENCLAW_TELEGRAM_REPLY_TO_MODE: "",
-    OPENCLAW_TELEGRAM_REACTION_LEVEL: "",
-    OPENCLAW_TELEGRAM_ALLOW_FROM: "[]",
-    OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: "[]",
-    OPENCLAW_TELEGRAM_PROXY: "",
-    OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY: "true",
-    OPENCLAW_TOPIC_ACP: "",
-    OPENCLAW_INSTANCE_ID: context.instanceId,
-    OPENCLAW_PORT_MANAGED: "true",
-    OPENCLAW_GATEWAY_PORT: String(LEGACY_COMPOSE_PORT),
-    OPENCLAW_GATEWAY_BIND: "lan",
-    OPENCLAW_GATEWAY_TOKEN: randomToken(),
-    OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS: "",
-    TELEGRAM_BOT_TOKEN: "replace-with-your-botfather-token",
-    OPENAI_API_KEY: "",
-    GITHUB_PERSONAL_ACCESS_TOKEN: "",
-    TARGET_AUTH_PATH: ""
-  };
-
-  const merged = {
-    ...defaults,
-    ...existingLocalEnv,
-    ...(options.telegramBotToken ? { TELEGRAM_BOT_TOKEN: options.telegramBotToken } : {}),
-    ...(options.openaiApiKey ? { OPENAI_API_KEY: options.openaiApiKey } : {}),
-    ...(options.targetAuthPath != null ? { TARGET_AUTH_PATH: toDockerPath(path.resolve(options.targetAuthPath)) } : {}),
-    ...(options.acpAllowedAgent?.length ? { OPENCLAW_ACP_ALLOWED_AGENTS: JSON.stringify(uniqueStrings(options.acpAllowedAgent)) } : {}),
-    ...(options.allowUser?.length ? { OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(normalizePrincipalArray(options.allowUser)) } : {}),
-    ...(options.groupAllowUser?.length ? { OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(normalizePrincipalArray(options.groupAllowUser)) } : {})
-  };
-
-  const normalized = {
-    ...merged,
-    OPENCLAW_STACK_IMAGE: String(context.localRuntimeImage ?? "").trim(),
-  };
-
-  if (!String(normalized.TARGET_AUTH_PATH ?? "").trim() && defaultTargetAuthPath) {
-    normalized.TARGET_AUTH_PATH = defaultTargetAuthPath;
-  }
-
-  if (plugin.security.authBootstrapMode !== "codex" && !options.openaiApiKey && options.targetAuthPath == null) {
-    normalized.OPENAI_API_KEY = normalized.OPENAI_API_KEY || "";
-    normalized.TARGET_AUTH_PATH = normalized.TARGET_AUTH_PATH || "";
-  }
-
-  return normalized;
-}
-
 function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthPath = "") {
   const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || String(LEGACY_COMPOSE_PORT);
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
@@ -1092,8 +1021,13 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthP
     OPENCLAW_ACPX_PERMISSION_MODE: "approve-all",
     OPENCLAW_ACPX_NON_INTERACTIVE_PERMISSIONS: "fail",
     OPENCLAW_COMMAND_LOGGER_ENABLED: String(Boolean(manifest.security.commandLoggerEnabled)),
+    OPENCLAW_PROJECT_NAME: manifest.projectName,
+    OPENCLAW_RUNTIME_PROFILE: manifest.runtimeProfile,
+    OPENCLAW_QUEUE_PROFILE: manifest.queueProfile,
+    OPENCLAW_DEPLOYMENT_PROFILE: manifest.deploymentProfile,
+    OPENCLAW_VERIFICATION_COMMANDS: JSON.stringify(manifest.verificationCommands),
+    OPENCLAW_TELEGRAM_THREAD_BINDINGS_SPAWN_ACP: String(Boolean(manifest.telegram.threadBindings?.spawnAcpSessions)),
     TARGET_REPO_PATH: toDockerPath(context.repoRoot),
-    GENERATED_MANIFEST_PATH: toDockerPath(context.paths.manifestFile),
     TARGET_AUTH_PATH: targetAuthPath ? toDockerPath(targetAuthPath) : ""
   };
 }
@@ -1226,15 +1160,15 @@ async function ensureTelegramBotTokenReady(context, state) {
 
   const token = String(state.localEnv.TELEGRAM_BOT_TOKEN ?? "").trim();
   if (!hasConfiguredTelegramBotToken(token)) {
-    throw new Error(`Telegram bot token is missing. Set TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+    throw new Error(`Telegram bot token is missing. Set TELEGRAM_BOT_TOKEN in ${context.paths.secretsEnvFile}.`);
   }
   if (!looksLikeTelegramBotToken(token)) {
-    throw new Error(`Telegram bot token format looks invalid. Update TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+    throw new Error(`Telegram bot token format looks invalid. Update TELEGRAM_BOT_TOKEN in ${context.paths.secretsEnvFile}.`);
   }
 
   const probe = await probeTelegramBotToken(token);
   if (probe.definitiveFailure) {
-    throw new Error(`Telegram bot token was rejected by the Telegram Bot API${probe.detail ? ` (${probe.detail})` : ""}. Update TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`);
+    throw new Error(`Telegram bot token was rejected by the Telegram Bot API${probe.detail ? ` (${probe.detail})` : ""}. Update TELEGRAM_BOT_TOKEN in ${context.paths.secretsEnvFile}.`);
   }
 }
 
@@ -1405,36 +1339,31 @@ async function rerenderIfRunning(context) {
 }
 
 async function prepareState(context, options = {}) {
-  const pluginRaw = await readJsonFile(context.paths.pluginFile, null);
-  if (!pluginRaw) {
-    throw new Error(`Missing ${context.paths.pluginFile}. Run ${PRODUCT_NAME} init first.`);
+  const configRaw = await readJsonFile(context.paths.configFile, null);
+  if (!configRaw) {
+    throw new Error(`Missing ${context.paths.configFile}. Run ${PRODUCT_NAME} init first.`);
   }
 
-  const plugin = normalizePluginConfig(pluginRaw, context.repoRoot, context.detection, options);
-  const existingLocalEnv = await readEnvFile(context.paths.localEnvFile);
-  const ensuredInstance = await ensureInstanceLocalEnv(context, existingLocalEnv, options);
+  const plugin = normalizePluginConfig(configRaw, context.repoRoot, context.detection, options);
+  const secrets = await readEnvFile(context.paths.secretsEnvFile);
+  const ensuredInstance = await ensureInstanceLocalEnv(context, {}, options);
   const localEnv = {
-    ...buildLocalEnvTemplateValues(
-      context,
-      plugin,
-      existingLocalEnv,
-      options
-    ),
+    OPENCLAW_IMAGE: DEFAULT_OPENCLAW_IMAGE,
+    OPENCLAW_AGENT_NPM_PACKAGES: "",
+    OPENCLAW_AGENT_INSTALL_COMMAND: "",
+    OPENCLAW_TOOLING_INSTALL_COMMAND: "",
+    ...secrets,
     ...ensuredInstance.localEnv
   };
-  if (JSON.stringify(localEnv) !== JSON.stringify(existingLocalEnv)) {
-    await writeEnvFile(context.paths.localEnvFile, localEnv, LOCAL_ENV_HEADER);
-  }
   const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
-  const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnv, options);
+  const manifest = buildEffectiveManifest(plugin, context.repoRoot, {}, options);
   const validationErrors = validateProjectManifest(manifest);
   if (validationErrors.length > 0) {
-    throw new Error(`Plugin config is invalid: ${validationErrors.join("; ")}`);
+    throw new Error(`Config is invalid: ${validationErrors.join("; ")}`);
   }
 
   await ensureDir(context.paths.stateDir);
   await ensureDockerMcpConfig(context);
-  await writeJsonFile(context.paths.manifestFile, manifest);
   const runtimeEnv = buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthPath);
   await writeTextFile(context.paths.composeFile, renderComposeTemplate({
     includeAuthMount: Boolean(String(runtimeEnv.TARGET_AUTH_PATH ?? "").trim()),
@@ -1648,7 +1577,7 @@ async function ensureDockerMcpSetup(context, options = {}) {
   }
 
   const actions = [];
-  const localEnv = options.localEnv ?? await readEnvFile(context.paths.localEnvFile);
+  const localEnv = options.localEnv ?? await readEnvFile(context.paths.secretsEnvFile);
   const secretStatus = await syncDockerMcpSecrets(context, localEnv);
   actions.push(...secretStatus.actions);
   const finalStatus = await readDockerMcpStatus(context, repoConfigPath);
@@ -1887,11 +1816,20 @@ async function promptForInit(context, plugin, existingLocalEnv, options, detecte
 
 async function handleInit(context, options) {
   await ensureDir(context.paths.openclawDir);
-  const existingPlugin = await readJsonFile(context.paths.pluginFile, null);
-  const existingLocalEnv = await readEnvFile(context.paths.localEnvFile);
+  const existingConfig = await readJsonFile(context.paths.configFile, null);
+  const existingSecrets = await readEnvFile(context.paths.secretsEnvFile);
+  const existingLocalEnv = {
+    ...existingSecrets,
+    ...(existingConfig?.telegram
+      ? {
+          OPENCLAW_TELEGRAM_ALLOW_FROM: JSON.stringify(existingConfig.telegram.allowFrom ?? []),
+          OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM: JSON.stringify(existingConfig.telegram.groupAllowFrom ?? []),
+        }
+      : {}),
+  };
   const detectedCodexAuthPath = await detectDefaultCodexAuthPath();
-  const basePlugin = normalizePluginConfig(existingPlugin ?? {}, context.repoRoot, context.detection, options);
-  const initState = existingPlugin && !options.force
+  const basePlugin = normalizePluginConfig(existingConfig ?? {}, context.repoRoot, context.detection, options);
+  const initState = existingConfig && !options.force
     ? { plugin: basePlugin, localEnv: {} }
     : await promptForInit(context, basePlugin, existingLocalEnv, options, detectedCodexAuthPath);
   const plugin = initState.plugin;
@@ -1900,42 +1838,34 @@ async function handleInit(context, options) {
     throw new Error("ACP default agent is required. Pass --acp-default-agent in non-interactive mode or rerun init interactively.");
   }
 
-  const localEnvValues = {
-    ...buildLocalEnvTemplateValues(context, plugin, existingLocalEnv, options, detectedCodexAuthPath),
-    ...initState.localEnv
-  };
-  const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnvValues, options);
+  const manifest = buildEffectiveManifest(plugin, context.repoRoot, initState.localEnv, options);
   const validationErrors = validateProjectManifest(manifest);
   if (validationErrors.length > 0) {
     throw new Error(`Cannot initialize workspace: ${validationErrors.join("; ")}`);
   }
 
-  const shouldWritePlugin = !existingPlugin || options.force || JSON.stringify(existingPlugin) !== JSON.stringify(plugin);
-  const pluginStatus = path.relative(context.repoRoot, context.paths.pluginFile);
-  if (shouldWritePlugin) {
-    await writeJsonFile(context.paths.pluginFile, plugin);
+  const shouldWriteConfig = !existingConfig || options.force || JSON.stringify(existingConfig) !== JSON.stringify(plugin);
+  const configStatus = path.relative(context.repoRoot, context.paths.configFile);
+  if (shouldWriteConfig) {
+    await writeJsonFile(context.paths.configFile, plugin);
   }
 
   if (!(await fileExists(context.paths.instructionsFile)) || options.force) {
     await writeTextFile(context.paths.instructionsFile, defaultInstructionsTemplate(plugin.projectName));
   }
 
-  if (!(await fileExists(context.paths.localEnvFile)) || options.force) {
-    await writeEnvFile(
-      context.paths.localEnvFile,
-      localEnvValues,
-      LOCAL_ENV_HEADER
-    );
+  const secretsToWrite = {
+    TELEGRAM_BOT_TOKEN: initState.localEnv.TELEGRAM_BOT_TOKEN ?? existingSecrets.TELEGRAM_BOT_TOKEN ?? "replace-with-your-botfather-token",
+    OPENAI_API_KEY: initState.localEnv.OPENAI_API_KEY ?? existingSecrets.OPENAI_API_KEY ?? "",
+    GITHUB_PERSONAL_ACCESS_TOKEN: initState.localEnv.GITHUB_PERSONAL_ACCESS_TOKEN ?? existingSecrets.GITHUB_PERSONAL_ACCESS_TOKEN ?? "",
+    TARGET_AUTH_PATH: initState.localEnv.TARGET_AUTH_PATH ?? existingSecrets.TARGET_AUTH_PATH ?? "",
+  };
+  if (!(await fileExists(context.paths.secretsEnvFile)) || options.force) {
+    await writeEnvFile(context.paths.secretsEnvFile, secretsToWrite, SECRETS_ENV_HEADER);
   }
 
   await ensureGitignoreEntries(context.repoRoot);
   const state = await runWithSpinner("Preparing workspace state", () => prepareState(context, options), options);
-  await writeTextFile(context.paths.localEnvExampleFile, defaultLocalEnvExample({
-    instanceId: context.instanceId,
-    gatewayPort: state.localEnv.OPENCLAW_GATEWAY_PORT,
-    portManaged: state.localEnv.OPENCLAW_PORT_MANAGED,
-    stackImage: state.localEnv.OPENCLAW_STACK_IMAGE
-  }));
   const mcp = await runWithSpinner("Syncing Docker MCP", () => ensureDockerMcpSetup(context, {
     repoConfigPath: context.paths.dockerMcpConfigFile,
     localEnv: state.localEnv
@@ -1948,9 +1878,9 @@ async function handleInit(context, options) {
     { label: "Agent", value: formatAgentSummary(plugin.acp.defaultAgent, state.manifest, state.localEnv) }
   ], [
     buildPreparedSection([
-      pluginStatus,
-      path.relative(context.repoRoot, context.paths.localEnvFile),
-      path.relative(context.repoRoot, context.paths.manifestFile),
+      configStatus,
+      path.relative(context.repoRoot, context.paths.secretsEnvFile),
+      path.relative(context.repoRoot, context.paths.runtimeEnvFile),
       path.relative(context.repoRoot, context.paths.composeFile),
       path.relative(context.repoRoot, context.paths.dockerMcpConfigFile)
     ]),
@@ -1973,11 +1903,10 @@ async function handleInit(context, options) {
 }
 
 async function handleConfigValidate(context, options) {
-  const pluginRaw = await readJsonFile(context.paths.pluginFile, null);
-  if (!pluginRaw) throw new Error(`Missing ${context.paths.pluginFile}`);
+  const pluginRaw = await readJsonFile(context.paths.configFile, null);
+  if (!pluginRaw) throw new Error(`Missing ${context.paths.configFile}`);
   const plugin = normalizePluginConfig(pluginRaw, context.repoRoot, context.detection, options);
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
-  const manifest = buildEffectiveManifest(plugin, context.repoRoot, localEnv, options);
+  const manifest = buildEffectiveManifest(plugin, context.repoRoot, {}, options);
   const errors = validateProjectManifest(manifest);
   const payload = {
     ok: errors.length === 0,
@@ -2004,12 +1933,12 @@ async function handleConfigValidate(context, options) {
 }
 
 async function handleConfigMigrate(context, options) {
-  const pluginRaw = await readJsonFile(context.paths.pluginFile, null);
-  if (!pluginRaw) throw new Error(`Missing ${context.paths.pluginFile}`);
+  const pluginRaw = await readJsonFile(context.paths.configFile, null);
+  if (!pluginRaw) throw new Error(`Missing ${context.paths.configFile}`);
   const plugin = normalizePluginConfig(pluginRaw, context.repoRoot, context.detection, options);
-  await writeJsonFile(context.paths.pluginFile, plugin);
+  await writeJsonFile(context.paths.configFile, plugin);
   printCommandReport("success", "Configuration migrated", [
-    { label: "File", value: path.relative(context.repoRoot, context.paths.pluginFile) },
+    { label: "File", value: path.relative(context.repoRoot, context.paths.configFile) },
     { label: "Version", value: plugin.version }
   ]);
 }
@@ -2024,7 +1953,7 @@ async function handleUp(context, options) {
     printCommandReport("success", "Up complete", [
       { label: "Repo", value: context.repoRoot },
       { label: "Deployment", value: "native-dev" },
-      { label: "Manifest", value: path.relative(context.repoRoot, context.paths.manifestFile) }
+      { label: "Manifest", value: path.relative(context.repoRoot, context.paths.runtimeEnvFile) }
     ], [
       buildStatusSection("Integrations", "info", [
         {
@@ -2034,7 +1963,7 @@ async function handleUp(context, options) {
         }
       ]),
       buildNextStepsSection([
-        `Use ${path.relative(context.repoRoot, context.paths.manifestFile)} with the official OpenClaw onboarding flow.`
+        `Use ${path.relative(context.repoRoot, context.paths.runtimeEnvFile)} with the official OpenClaw onboarding flow.`
       ])
     ].filter(Boolean));
     return;
@@ -2042,7 +1971,7 @@ async function handleUp(context, options) {
 
   const portState = await detectGatewayPortState(context, state.localEnv);
   if (!portState.ok) {
-    throw new Error(`${portState.message} ${state.localEnv.OPENCLAW_PORT_MANAGED === "true" ? "Run `openclaw-repo-agent up --reassign-port` or `openclaw-repo-agent doctor --fix`." : "Edit OPENCLAW_GATEWAY_PORT in .openclaw/local.env."}`);
+    throw new Error(`${portState.message} Run \`${PRODUCT_NAME} up --reassign-port\` or \`${PRODUCT_NAME} doctor --fix\`.`);
   }
   const runningTokenConflicts = await findRunningTelegramTokenConflicts(context, state.localEnv);
   if (runningTokenConflicts.length > 0) {
@@ -2090,7 +2019,7 @@ async function handleVerify(context, options) {
     throw new Error("OpenClaw gateway is not running. Start it with openclaw-repo-agent up first.");
   }
   if (state.manifest.verificationCommands.length === 0) {
-    throw new Error(`No verification commands are configured in ${context.paths.pluginFile}.`);
+    throw new Error(`No verification commands are configured in ${context.paths.configFile}.`);
   }
   const completedCommands = [];
   for (const command of state.manifest.verificationCommands) {
@@ -2313,7 +2242,7 @@ async function handleExternalGatewayPair(context, options) {
 async function handlePair(context, options) {
   validateExternalGatewayPairOptions(options);
   await prepareState(context, options);
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
+  const localEnv = await readEnvFile(context.paths.secretsEnvFile);
   let pairResult = summarizePairTargets(isExternalGatewayPairMode(options) ? "external" : "local", []);
 
   if (isExternalGatewayPairMode(options)) {
@@ -2350,43 +2279,37 @@ async function handlePair(context, options) {
     return;
   }
 
-  const nextAllowFrom = JSON.stringify(normalizePrincipalArray([
-    ...parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []),
-    ...(options.allowUser ?? [])
-  ]));
-  const nextGroupAllowFrom = JSON.stringify(normalizePrincipalArray([
-    ...parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []),
-    ...(options.groupAllowUser ?? [])
-  ]));
-  const nextDmPolicy = options.switchDmPolicy || localEnv.OPENCLAW_TELEGRAM_DM_POLICY;
-  const nextGroupPolicy = options.switchGroupPolicy || localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY;
-  const settingsChanged = nextAllowFrom !== localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM
-    || nextGroupAllowFrom !== localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM
-    || nextDmPolicy !== localEnv.OPENCLAW_TELEGRAM_DM_POLICY
-    || nextGroupPolicy !== localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY;
+  const config = await readJsonFile(context.paths.configFile, {});
+  const currentAllowFrom = config.telegram?.allowFrom ?? parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM, []);
+  const currentGroupAllowFrom = config.telegram?.groupAllowFrom ?? parseFlexibleArray(localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, []);
+  const nextAllowFrom = normalizePrincipalArray([...currentAllowFrom, ...(options.allowUser ?? [])]);
+  const nextGroupAllowFrom = normalizePrincipalArray([...currentGroupAllowFrom, ...(options.groupAllowUser ?? [])]);
+  const nextDmPolicy = options.switchDmPolicy || config.telegram?.dmPolicy || "pairing";
+  const nextGroupPolicy = options.switchGroupPolicy || config.telegram?.groupPolicy || "disabled";
+  const settingsChanged = JSON.stringify(nextAllowFrom) !== JSON.stringify(currentAllowFrom)
+    || JSON.stringify(nextGroupAllowFrom) !== JSON.stringify(currentGroupAllowFrom)
+    || nextDmPolicy !== (config.telegram?.dmPolicy || "pairing")
+    || nextGroupPolicy !== (config.telegram?.groupPolicy || "disabled");
 
-  localEnv.OPENCLAW_TELEGRAM_ALLOW_FROM = nextAllowFrom;
-  localEnv.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM = nextGroupAllowFrom;
-  localEnv.OPENCLAW_TELEGRAM_DM_POLICY = nextDmPolicy;
-  localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY = nextGroupPolicy;
-
-  const plugin = normalizePluginConfig(await readJsonFile(context.paths.pluginFile, {}), context.repoRoot, context.detection, options);
-  await writeEnvFile(
-    context.paths.localEnvFile,
-    {
-      ...buildLocalEnvTemplateValues(context, plugin, localEnv, options),
-      ...localEnv
+  const nextConfig = {
+    ...config,
+    telegram: {
+      ...config.telegram,
+      allowFrom: nextAllowFrom,
+      groupAllowFrom: nextGroupAllowFrom,
+      dmPolicy: nextDmPolicy,
+      groupPolicy: nextGroupPolicy,
     },
-    LOCAL_ENV_HEADER
-  );
+  };
+  await writeJsonFile(context.paths.configFile, nextConfig);
   await prepareState(context, options);
   await rerenderIfRunning(context);
   printCommandReport(pairResult.approved || settingsChanged ? "success" : "info", "Pairing settings updated", [
     { label: "Action", value: pairResult.action },
     { label: "Request", value: pairResult.requestCode || "(latest or none)" },
     { label: "Allowlists", value: "updated" },
-    { label: "DM policy", value: localEnv.OPENCLAW_TELEGRAM_DM_POLICY },
-    { label: "Group policy", value: localEnv.OPENCLAW_TELEGRAM_GROUP_POLICY }
+    { label: "DM policy", value: nextDmPolicy },
+    { label: "Group policy", value: nextGroupPolicy }
   ], [
     buildPairDetailsSection(pairResult.targets)
   ].filter(Boolean));
@@ -2573,14 +2496,14 @@ async function handleDoctor(context, options) {
     );
   }
 
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
+  const localEnv = await readEnvFile(context.paths.secretsEnvFile);
   const telegramToken = String(localEnv.TELEGRAM_BOT_TOKEN ?? "").trim();
   pushCheck(
     results,
     "telegram-token",
     hasConfiguredTelegramBotToken(telegramToken),
     hasConfiguredTelegramBotToken(telegramToken) ? "Telegram bot token is configured." : "Telegram bot token is missing.",
-    hasConfiguredTelegramBotToken(telegramToken) ? "" : `Set TELEGRAM_BOT_TOKEN in ${context.paths.localEnvFile}.`
+    hasConfiguredTelegramBotToken(telegramToken) ? "" : `Set TELEGRAM_BOT_TOKEN in ${context.paths.secretsEnvFile}.`
   );
 
   const authPath = String(localEnv.TARGET_AUTH_PATH ?? "").trim();
@@ -2594,7 +2517,7 @@ async function handleDoctor(context, options) {
     "auth",
     authOk,
     authOk ? "Auth bootstrap prerequisites are present." : "Codex auth bootstrap is not ready.",
-    authOk ? "" : `Set TARGET_AUTH_PATH to a Codex home with auth.json or provide OPENAI_API_KEY in ${context.paths.localEnvFile}.`
+    authOk ? "" : `Set TARGET_AUTH_PATH to a Codex home with auth.json or provide OPENAI_API_KEY in ${context.paths.secretsEnvFile}.`
   );
 
   const manifestErrors = validateProjectManifest(state.manifest);
@@ -2629,7 +2552,7 @@ async function handleDoctor(context, options) {
       ? ""
       : (shouldManageGatewayPort(state.localEnv)
         ? "Run `openclaw-repo-agent doctor --fix` or `openclaw-repo-agent up --reassign-port`."
-        : `Edit OPENCLAW_GATEWAY_PORT in ${context.paths.localEnvFile}.`)
+        : `Run \`${PRODUCT_NAME} up --reassign-port\` or \`${PRODUCT_NAME} doctor --fix\`.`)
   );
 
   const legacyContainers = await detectLegacyComposeProject(context);
@@ -2702,13 +2625,13 @@ async function handleDoctor(context, options) {
       inContainerDoctor.code === 0 ? "" : "Review the in-container doctor output and fix auth or render errors."
     );
 
-    const workspaceAccess = await dockerCompose(context, ["exec", "openclaw-gateway", "sh", "-lc", "test -d /workspace && test -r /config/project-manifest.json"], { capture: true });
+    const workspaceAccess = await dockerCompose(context, ["exec", "openclaw-gateway", "sh", "-lc", "test -d /workspace"], { capture: true });
     pushCheck(
       results,
       "workspace-mount",
       workspaceAccess.code === 0,
-      workspaceAccess.code === 0 ? "Workspace and manifest mounts are readable." : "Workspace or manifest mount is not readable inside the container.",
-      workspaceAccess.code === 0 ? "" : "Check TARGET_REPO_PATH and GENERATED_MANIFEST_PATH in the rendered runtime env."
+      workspaceAccess.code === 0 ? "Workspace mount is readable." : "Workspace mount is not readable inside the container.",
+      workspaceAccess.code === 0 ? "" : "Check TARGET_REPO_PATH in the rendered runtime env."
     );
   }
 
@@ -2790,7 +2713,7 @@ async function handleMcpSetup(context, options) {
     buildPreparedSection([path.relative(context.repoRoot, payload.repoConfigPath)]),
     buildStatusSection("Notes", "info", [
       payload.actions.length > 0 ? `Docker MCP: ${payload.actions.join(", ")}` : "Docker MCP: ready",
-      "GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/local.env.",
+      "GitHub MCP auth can be synced by setting GITHUB_PERSONAL_ACCESS_TOKEN in .openclaw/secrets.env.",
       "Use `playwright-cli` as the only browser automation tool in this repo; do not use `npx playwright`.",
       payload.nextStep
     ])
@@ -2854,7 +2777,7 @@ async function handleMcpStatus(context, options) {
   const configPathResult = await dockerMcpCapture(["config", "read"], context.repoRoot);
   const clientListResult = await dockerMcpCapture(["client", "ls", "--global", "--json"], context.repoRoot);
   Object.assign(payload, buildMcpStatusPayload(context, repoConfigPath, await fileExists(repoConfigPath), configPathResult, clientListResult));
-  const localEnv = await readEnvFile(context.paths.localEnvFile);
+  const localEnv = await readEnvFile(context.paths.secretsEnvFile);
   payload.secretStatus = await readDockerMcpSecretStatus(context, localEnv);
 
   if (options.json) {
@@ -2951,7 +2874,7 @@ Commands:
   mcp use          Activate this repo's Docker MCP config for Codex
   mcp status       Show Docker MCP status for this repo
   config validate  Validate the repo plugin and rendered manifest
-  config migrate   Rewrite plugin.json using current defaults
+  config migrate   Rewrite config.json using current defaults
 
 Global options:
   --repo-root <path>

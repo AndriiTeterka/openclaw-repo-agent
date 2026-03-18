@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { normalizeAuthMode, normalizeProjectManifest } from "./manifest-contract.mjs";
-import { copyFileIfNewer, ensureDir, fileExists, readJsonFile, safeRunCommand, writeJsonFile } from "./shared.mjs";
+import { buildManifestFromEnv, normalizeAuthMode } from "./manifest-contract.mjs";
+import { copyFileIfNewer, ensureDir, fileExists, safeRunCommand, writeJsonFile } from "./shared.mjs";
 
 function isMissingCodexBinary(stderr = "") {
   return /ENOENT|not found|is not recognized/i.test(String(stderr ?? "").trim());
@@ -267,8 +267,7 @@ async function noneAdapter() {
 export async function probeAuth(options = {}) {
   const homeDir = process.env.HOME?.trim() || "/home/node";
   const authMountPath = "/agent-auth";
-  const manifestPath = process.env.OPENCLAW_PROJECT_MANIFEST?.trim() || "/config/project-manifest.json";
-  const manifest = normalizeProjectManifest(await readJsonFile(manifestPath, {}));
+  const manifest = buildManifestFromEnv(process.env);
   const mode = normalizeAuthMode(process.env.OPENCLAW_BOOTSTRAP_AUTH_MODE ?? manifest.security.authBootstrapMode);
   const codexBin = process.env.OPENCLAW_AGENT_AUTH_CLI_BIN?.trim()
     || process.env.OPENCLAW_CODEX_CLI_BIN?.trim()

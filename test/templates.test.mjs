@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   defaultInstructionsTemplate,
-  defaultLocalEnvExample,
+  defaultSecretsEnvTemplate,
   renderComposeTemplate,
   renderDockerMcpConfigTemplate
 } from "../cli/src/templates.mjs";
@@ -22,18 +22,15 @@ test("renderDockerMcpConfigTemplate scopes filesystem access to the repo root", 
   assert.doesNotMatch(output, /# - playwright/);
 });
 
-test("defaultLocalEnvExample documents MCP credential sync", () => {
-  const output = defaultLocalEnvExample({
-    stackImage: "openclaw-repo-agent-runtime:0.4.0-demo"
-  });
+test("defaultSecretsEnvTemplate documents MCP credential sync", () => {
+  const output = defaultSecretsEnvTemplate();
 
   assert.match(output, /\.openclaw\/ is git-ignored by default/);
   assert.match(output, /mirror configured API-style credentials into Docker MCP secrets automatically/);
-  assert.match(output, /OPENCLAW_GATEWAY_BIND stays "lan" in Docker bridge mode/);
   assert.match(output, /GITHUB_PERSONAL_ACCESS_TOKEN=/);
-  assert.match(output, /OPENCLAW_INSTANCE_ID=/);
-  assert.match(output, /OPENCLAW_PORT_MANAGED=true/);
-  assert.match(output, /OPENCLAW_STACK_IMAGE=openclaw-repo-agent-runtime:0\.4\.0-demo/);
+  assert.match(output, /TELEGRAM_BOT_TOKEN=/);
+  assert.match(output, /OPENAI_API_KEY=/);
+  assert.match(output, /TARGET_AUTH_PATH=/);
   assert.doesNotMatch(output, /OPENCLAW_USE_LOCAL_BUILD=/);
 });
 

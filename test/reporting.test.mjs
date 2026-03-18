@@ -18,8 +18,8 @@ test("renderReport formats section-based output without ANSI when color is disab
         title: "Files",
         status: "success",
         items: [
-          { status: "success", text: ".openclaw/plugin.json" },
-          { status: "success", text: ".openclaw/local.env" }
+          { status: "success", text: ".openclaw/config.json" },
+          { status: "success", text: ".openclaw/secrets.env" }
         ]
       },
       {
@@ -54,7 +54,7 @@ test("renderReport formats section-based output without ANSI when color is disab
   assert.match(output, /⚙️\s+CONFIGURATION/);
   assert.match(output, /Repo:\s+C:\/demo\/repo/);
   assert.match(output, /📁\s+FILES CREATED/);
-  assert.match(output, /✔ \.openclaw\/plugin\.json/);
+  assert.match(output, /✔ \.openclaw\/config\.json/);
   assert.doesNotMatch(output, /\bWrote \.openclaw\/plugin\.json\b/);
   assert.match(output, /🩺\s+CHECKS/);
   assert.match(output, /✔ Docker CLI is available\./);

@@ -180,7 +180,7 @@ test("pair settings update report drops repo, mode, and gateway summary lines", 
   const handlePairBlock = source.match(/async function handlePair\(context, options\) \{[\s\S]*?\n\}/);
 
   assert.ok(handlePairBlock, "expected to find handlePair in cli source");
-  assert.match(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[\s*{ label: "Action", value: pairResult\.action },\s*{ label: "Request", value: pairResult\.requestCode \|\| "\(latest or none\)" },\s*{ label: "Allowlists", value: "updated" },\s*{ label: "DM policy", value: localEnv\.OPENCLAW_TELEGRAM_DM_POLICY },\s*{ label: "Group policy", value: localEnv\.OPENCLAW_TELEGRAM_GROUP_POLICY }\s*\], \[\s*buildPairDetailsSection\(pairResult\.targets\)\s*\]\.filter\(Boolean\)\);/s);
+  assert.match(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[\s*{ label: "Action", value: pairResult\.action },\s*{ label: "Request", value: pairResult\.requestCode \|\| "\(latest or none\)" },\s*{ label: "Allowlists", value: "updated" },\s*{ label: "DM policy", value: nextDmPolicy },\s*{ label: "Group policy", value: nextGroupPolicy }\s*\], \[\s*buildPairDetailsSection\(pairResult\.targets\)\s*\]\.filter\(Boolean\)\);/s);
   assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Repo", value: context\.repoRoot }/);
   assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Mode", value: pairResult\.mode }/);
   assert.doesNotMatch(handlePairBlock[0], /printCommandReport\(pairResult\.approved \|\| settingsChanged \? "success" : "info", "Pairing settings updated", \[[\s\S]*{ label: "Gateway"/);
@@ -347,7 +347,7 @@ test("config validation rejects unsupported ACP agents from plugin config", asyn
   const repoPath = path.join(tempRoot, "repo");
   const openclawPath = path.join(repoPath, ".openclaw");
   await fs.mkdir(openclawPath, { recursive: true });
-  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify({
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
     ...createPromptTestPlugin(),
     acp: {
       defaultAgent: "opencode",
@@ -366,20 +366,22 @@ test("config validation rejects unsupported ACP agents from plugin config", asyn
   );
 });
 
-test("config validation rejects unsupported ACP agents from local env overrides", async () => {
+test("config validation rejects unsupported ACP agents from config overrides", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bad-acp-env-"));
   const repoPath = path.join(tempRoot, "repo");
   const openclawPath = path.join(repoPath, ".openclaw");
   await fs.mkdir(openclawPath, { recursive: true });
-  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
-  await fs.writeFile(path.join(openclawPath, "local.env"), "OPENCLAW_ACP_DEFAULT_AGENT=opencode\n");
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
+    ...createPromptTestPlugin(),
+    acp: { defaultAgent: "opencode", allowedAgents: ["opencode"] }
+  }, null, 2));
 
   await assert.rejects(
     execFileAsync(process.execPath, [cliPath, "config", "validate", "--repo-root", repoPath, "--product-root=."], {
       cwd: repoRoot
     }),
     (error) => {
-      assert.match(error.stderr, /Unsupported OPENCLAW_ACP_DEFAULT_AGENT: opencode/i);
+      assert.match(error.stderr, /Unsupported acp\.defaultAgent: opencode/i);
       return true;
     }
   );
@@ -390,7 +392,7 @@ test("config validation rejects unsupported ACP agents from CLI flags", async ()
   const repoPath = path.join(tempRoot, "repo");
   const openclawPath = path.join(repoPath, ".openclaw");
   await fs.mkdir(openclawPath, { recursive: true });
-  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
 
   await assert.rejects(
     execFileAsync(process.execPath, [
@@ -516,7 +518,7 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
   await fs.mkdir(openclawPath, { recursive: true });
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-  await fs.writeFile(path.join(openclawPath, "plugin.json"), JSON.stringify({
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
     version: 1,
     profile: "custom",
     projectName: "legacy-codex",

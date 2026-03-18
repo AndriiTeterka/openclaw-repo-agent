@@ -591,3 +591,116 @@ export function buildManifestStatus(manifest, errors = []) {
     errors,
   };
 }
+
+/**
+ * Build a manifest structure from environment variables for runtime scripts.
+ * Used when project-manifest.json is not mounted (e.g. simplified config flow).
+ */
+export function buildManifestFromEnv(env = process.env) {
+  const gatewayPort = resolveInteger(env.OPENCLAW_GATEWAY_PORT, 18789);
+  const projectName = nonEmptyString(env.OPENCLAW_PROJECT_NAME, "workspace");
+  const repoPath = nonEmptyString(env.OPENCLAW_REPO_ROOT, ".");
+  const runtimeProfile = nonEmptyString(env.OPENCLAW_RUNTIME_PROFILE, "stable-chat");
+  const queueProfile = nonEmptyString(env.OPENCLAW_QUEUE_PROFILE, runtimeProfile);
+  const toolingProfile = nonEmptyString(env.OPENCLAW_TOOLING_PROFILE, "none");
+  const deploymentProfile = nonEmptyString(env.OPENCLAW_DEPLOYMENT_PROFILE, defaultDeploymentProfile(env.OPENCLAW_HOST_PLATFORM));
+  const verificationCommands = parseStringArrayEnv(env.OPENCLAW_VERIFICATION_COMMANDS, []);
+
+  const agent = {
+    id: nonEmptyString(env.OPENCLAW_AGENT_ID, "workspace"),
+    name: nonEmptyString(env.OPENCLAW_AGENT_NAME, defaultAgentName(projectName)),
+    defaultModel: nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, ""),
+    verboseDefault: nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, "off"),
+    blockStreamingDefault: nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT, "off"),
+    blockStreamingBreak: nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_BREAK, "text_end"),
+    typingMode: nonEmptyString(env.OPENCLAW_AGENT_TYPING_MODE, "never"),
+    typingIntervalSeconds: resolveInteger(env.OPENCLAW_AGENT_TYPING_INTERVAL_SECONDS, 12),
+    maxConcurrent: resolveInteger(env.OPENCLAW_AGENTS_MAX_CONCURRENT, 4),
+    skipBootstrap: resolveBoolean(env.OPENCLAW_AGENT_SKIP_BOOTSTRAP, true),
+    tools: {
+      deny: parseStringArrayEnv(env.OPENCLAW_AGENT_TOOLS_DENY, ["process"]),
+    },
+  };
+
+  const queue = {
+    mode: nonEmptyString(env.OPENCLAW_QUEUE_MODE, "collect"),
+    debounceMs: resolveInteger(env.OPENCLAW_QUEUE_DEBOUNCE_MS, 250),
+    cap: resolveInteger(env.OPENCLAW_QUEUE_CAP, 20),
+    inboundDebounceMs: resolveInteger(env.OPENCLAW_INBOUND_DEBOUNCE_MS, 150),
+  };
+
+  const threadBindingsSpawnAcp = resolveBoolean(
+    env.OPENCLAW_TELEGRAM_THREAD_BINDINGS_SPAWN_ACP ?? env.OPENCLAW_TOPIC_ACP,
+    false,
+  );
+  const telegram = {
+    enabled: resolveBoolean(env.OPENCLAW_TELEGRAM_ENABLED, true),
+    dmPolicy: nonEmptyString(env.OPENCLAW_TELEGRAM_DM_POLICY, "pairing"),
+    groupPolicy: nonEmptyString(env.OPENCLAW_TELEGRAM_GROUP_POLICY, "disabled"),
+    streamMode: nonEmptyString(env.OPENCLAW_TELEGRAM_STREAM_MODE, "partial"),
+    blockStreaming: resolveBoolean(env.OPENCLAW_TELEGRAM_BLOCK_STREAMING, false),
+    replyToMode: nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, "first"),
+    reactionLevel: nonEmptyString(env.OPENCLAW_TELEGRAM_REACTION_LEVEL, "minimal"),
+    proxy: nonEmptyString(env.OPENCLAW_TELEGRAM_PROXY, ""),
+    configWrites: resolveBoolean(env.OPENCLAW_TELEGRAM_CONFIG_WRITES, false),
+    allowFrom: normalizePrincipalArray(parseStringArrayEnv(env.OPENCLAW_TELEGRAM_ALLOW_FROM, [])),
+    groupAllowFrom: normalizePrincipalArray(parseStringArrayEnv(env.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, [])),
+    groups: { "*": { requireMention: true } },
+    threadBindings: {
+      spawnAcpSessions: threadBindingsSpawnAcp,
+    },
+    network: {
+      autoSelectFamily: resolveBoolean(env.OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY, true),
+    },
+  };
+
+  const acp = {
+    defaultAgent: nonEmptyString(env.OPENCLAW_ACP_DEFAULT_AGENT, ""),
+    allowedAgents: uniqueStrings([
+      nonEmptyString(env.OPENCLAW_ACP_DEFAULT_AGENT, ""),
+      ...parseStringArrayEnv(env.OPENCLAW_ACP_ALLOWED_AGENTS, []),
+    ].filter(Boolean)),
+    preferredMode: nonEmptyString(env.OPENCLAW_ACP_PREFERRED_MODE, "oneshot"),
+    maxConcurrentSessions: resolveInteger(env.OPENCLAW_ACP_MAX_CONCURRENT_SESSIONS, 4),
+    ttlMinutes: resolveInteger(env.OPENCLAW_ACP_TTL_MINUTES, 120),
+    stream: {
+      coalesceIdleMs: resolveInteger(env.OPENCLAW_ACP_STREAM_COALESCE_IDLE_MS, 300),
+      maxChunkChars: resolveInteger(env.OPENCLAW_ACP_STREAM_MAX_CHARS, 1200),
+    },
+  };
+
+  const tools = {
+    exec: {
+      timeoutSec: resolveInteger(env.OPENCLAW_EXEC_TIMEOUT_SEC, 600),
+    },
+  };
+
+  const security = {
+    authBootstrapMode: nonEmptyString(env.OPENCLAW_BOOTSTRAP_AUTH_MODE, "external"),
+    commandLoggerEnabled: resolveBoolean(env.OPENCLAW_COMMAND_LOGGER_ENABLED, true),
+    toolDeny: ["process"],
+  };
+
+  const messages = {
+    statusReactions: { enabled: true },
+  };
+
+  return normalizeProjectManifest({
+    version: 1,
+    projectName,
+    repoPath,
+    deploymentProfile,
+    toolingProfile,
+    toolingInstallCommand: nonEmptyString(env.OPENCLAW_TOOLING_INSTALL_COMMAND, ""),
+    runtimeProfile,
+    queueProfile,
+    verificationCommands,
+    agent,
+    queue,
+    telegram,
+    acp,
+    messages,
+    tools,
+    security,
+  }, { hostPlatform: env.OPENCLAW_HOST_PLATFORM });
+}

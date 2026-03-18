@@ -1,5 +1,4 @@
 import { DEFAULT_OPENCLAW_IMAGE } from "./builtin-profiles.mjs";
-import { GATEWAY_PORT_RANGE_START } from "./instance-registry.mjs";
 
 export function defaultInstructionsTemplate(projectName) {
   return `# Repo Agent Instructions
@@ -17,50 +16,12 @@ export function defaultInstructionsTemplate(projectName) {
 `;
 }
 
-export function defaultLocalEnvExample(values = {}) {
-  const stackImage = values.stackImage || "openclaw-repo-agent-runtime:local";
-  const gatewayPort = values.gatewayPort || String(GATEWAY_PORT_RANGE_START);
-  const instanceId = values.instanceId || "";
-  const portManaged = values.portManaged ?? "true";
-
-  return `# Local-only OpenClaw overrides for this repository.
-# Copy this file to .openclaw/local.env and fill in the required runtime values.
+export function defaultSecretsEnvTemplate() {
+  return `# OpenClaw secrets for this repository.
 # .openclaw/ is git-ignored by default.
 # init/up will mirror configured API-style credentials into Docker MCP secrets automatically.
-# TARGET_AUTH_PATH stays here because it is a local host path, not a keychain secret.
-# OPENCLAW_GATEWAY_BIND stays "lan" in Docker bridge mode so the host port mapping can reach the gateway.
-# The generated compose file still publishes the host port on 127.0.0.1 only unless you change the ports stanza.
+# TARGET_AUTH_PATH is a local host path to Codex auth (e.g. ~/.codex), not a keychain secret.
 
-OPENCLAW_STACK_IMAGE=${stackImage}
-OPENCLAW_IMAGE=${DEFAULT_OPENCLAW_IMAGE}
-OPENCLAW_AGENT_NPM_PACKAGES=
-OPENCLAW_AGENT_INSTALL_COMMAND=
-OPENCLAW_TOOLING_PROFILE=
-OPENCLAW_TOOLING_INSTALL_COMMAND=
-OPENCLAW_DEPLOYMENT_PROFILE=
-OPENCLAW_RUNTIME_PROFILE=
-OPENCLAW_QUEUE_PROFILE=
-OPENCLAW_BOOTSTRAP_AUTH_MODE=
-OPENCLAW_AGENT_DEFAULT_MODEL=
-OPENCLAW_ACP_DEFAULT_AGENT=
-OPENCLAW_ACP_ALLOWED_AGENTS=
-OPENCLAW_TELEGRAM_DM_POLICY=
-OPENCLAW_TELEGRAM_GROUP_POLICY=
-OPENCLAW_TELEGRAM_STREAM_MODE=
-OPENCLAW_TELEGRAM_BLOCK_STREAMING=
-OPENCLAW_TELEGRAM_REPLY_TO_MODE=
-OPENCLAW_TELEGRAM_REACTION_LEVEL=
-OPENCLAW_TELEGRAM_ALLOW_FROM=[]
-OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM=[]
-OPENCLAW_TELEGRAM_PROXY=
-OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY=true
-OPENCLAW_TOPIC_ACP=
-OPENCLAW_INSTANCE_ID=${instanceId}
-OPENCLAW_PORT_MANAGED=${portManaged}
-OPENCLAW_GATEWAY_PORT=${gatewayPort}
-OPENCLAW_GATEWAY_BIND=lan
-OPENCLAW_GATEWAY_TOKEN=replace-with-a-long-random-token
-OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS=
 # Required for Telegram pairing and runtime startup.
 TELEGRAM_BOT_TOKEN=replace-with-your-botfather-token
 # Only needed when auth mode is codex.
@@ -135,7 +96,6 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
     OPENAI_API_KEY: \${OPENAI_API_KEY}
     OPENCLAW_WORKSPACE: /workspace
     OPENCLAW_REPO_ROOT: /workspace
-    OPENCLAW_PROJECT_MANIFEST: /config/project-manifest.json
     OPENCLAW_RENDER_STATUS_PATH: /home/node/.openclaw/runtime/render-status.json
     OPENCLAW_HOST_PLATFORM: \${OPENCLAW_HOST_PLATFORM}
     OPENCLAW_TOOLING_PROFILE: \${OPENCLAW_EFFECTIVE_TOOLING_PROFILE}
@@ -181,7 +141,6 @@ ${commonBuild}  image: \${OPENCLAW_STACK_IMAGE}
   volumes:
     - openclaw-home:/home/node
 ${authVolume}    - \${TARGET_REPO_PATH}:/workspace:rw
-    - \${GENERATED_MANIFEST_PATH}:/config/project-manifest.json:ro
   tmpfs:
     - /tmp
     - /var/tmp

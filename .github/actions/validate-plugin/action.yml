@@ -1,5 +1,5 @@
 name: Validate OpenClaw Plugin
-description: Validate a consumer repo's .openclaw/plugin.json with the bundled CLI.
+description: Validate a consumer repo's .openclaw/config.json with the bundled CLI.
 inputs:
   repo-root:
     description: Repository root to validate.
