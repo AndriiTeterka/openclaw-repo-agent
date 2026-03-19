@@ -14,7 +14,7 @@ const SUPPORTED_RUNTIME_PROFILES = ["stable-chat", "interactive-steer", "topic-b
 const RUNTIME_PROFILE_PRESETS = {
   "stable-chat": {
     queue: {
-      mode: "collect",
+      mode: "steer",
       debounceMs: 250,
       cap: 20,
       inboundDebounceMs: 150,
@@ -31,10 +31,11 @@ const RUNTIME_PROFILE_PRESETS = {
     },
     agent: {
       maxConcurrent: 4,
-      verboseDefault: "off",
+      verboseDefault: "on",
+      thinkingDefault: "adaptive",
       blockStreamingDefault: "off",
       blockStreamingBreak: "text_end",
-      typingMode: "never",
+      typingMode: "message",
       typingIntervalSeconds: 12,
       tools: {
         deny: ["process"],
@@ -48,7 +49,7 @@ const RUNTIME_PROFILE_PRESETS = {
       groupAllowFrom: [],
       streamMode: "partial",
       blockStreaming: false,
-      replyToMode: "first",
+      replyToMode: "all",
       reactionLevel: "minimal",
       proxy: "",
       configWrites: false,
@@ -220,10 +221,11 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   agent.id = nonEmptyString(agent.id, "workspace");
   agent.name = nonEmptyString(agent.name, defaultAgentName(projectName));
   agent.defaultModel = nonEmptyString(agent.defaultModel, "");
-  agent.verboseDefault = nonEmptyString(agent.verboseDefault, "off");
+  agent.verboseDefault = nonEmptyString(agent.verboseDefault, "on");
+  agent.thinkingDefault = nonEmptyString(agent.thinkingDefault, "adaptive");
   agent.blockStreamingDefault = nonEmptyString(agent.blockStreamingDefault, "off");
   agent.blockStreamingBreak = nonEmptyString(agent.blockStreamingBreak, "text_end");
-  agent.typingMode = nonEmptyString(agent.typingMode, "");
+  agent.typingMode = nonEmptyString(agent.typingMode, "message");
   agent.typingIntervalSeconds = resolveInteger(agent.typingIntervalSeconds, 0);
   agent.maxConcurrent = resolveInteger(agent.maxConcurrent, 4);
   agent.skipBootstrap = resolveBoolean(agent.skipBootstrap, true);
@@ -234,7 +236,7 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
     ]),
   };
 
-  queue.mode = nonEmptyString(queue.mode, "collect");
+  queue.mode = nonEmptyString(queue.mode, "steer");
   queue.debounceMs = resolveInteger(queue.debounceMs, 0);
   queue.cap = resolveInteger(queue.cap, 20);
   queue.inboundDebounceMs = resolveInteger(queue.inboundDebounceMs, 0);
@@ -299,7 +301,7 @@ export function validateProjectManifest(manifest) {
   pushError(errors, ["pairing", "allowlist", "open", "disabled"].includes(manifest.telegram?.dmPolicy), "telegram.dmPolicy must be pairing, allowlist, open, or disabled");
   pushError(errors, ["disabled", "allowlist", "open"].includes(manifest.telegram?.groupPolicy), "telegram.groupPolicy must be disabled, allowlist, or open");
   pushError(errors, ["partial", "block", "off"].includes(manifest.telegram?.streamMode), "telegram.streamMode must be partial, block, or off");
-  pushError(errors, ["first", "latest"].includes(manifest.telegram?.replyToMode), "telegram.replyToMode must be first or latest");
+  pushError(errors, ["off", "first", "all"].includes(manifest.telegram?.replyToMode), "telegram.replyToMode must be off, first, or all");
   pushError(errors, ["minimal", "off", "full"].includes(nonEmptyString(manifest.telegram?.reactionLevel, "minimal")), "telegram.reactionLevel must be minimal, off, or full");
   pushError(errors, Boolean(manifest.acp?.defaultAgent), "acp.defaultAgent is required");
   pushError(errors, isSupportedAcpAgent(manifest.acp?.defaultAgent), `acp.defaultAgent must be one of ${formatSupportedAcpAgents()}`);
@@ -350,6 +352,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
   const agentDir = nonEmptyString(env.OPENCLAW_AGENT_DIR, manifest.agent.agentDir || `/home/node/.openclaw/agents/${agentId}/agent`);
   const agentDefaultModel = nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, manifest.agent.defaultModel);
   const agentVerboseDefault = nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, manifest.agent.verboseDefault);
+  const agentThinkingDefault = nonEmptyString(env.OPENCLAW_AGENT_THINKING_DEFAULT, manifest.agent.thinkingDefault);
   const agentBlockStreamingDefault = nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT, manifest.agent.blockStreamingDefault);
   const agentBlockStreamingBreak = nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_BREAK, manifest.agent.blockStreamingBreak);
   const agentTypingMode = nonEmptyString(env.OPENCLAW_AGENT_TYPING_MODE, manifest.agent.typingMode);
@@ -420,6 +423,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               }
             : {}),
           verboseDefault: agentVerboseDefault,
+          ...(agentThinkingDefault ? { thinkingDefault: agentThinkingDefault } : {}),
           blockStreamingDefault: agentBlockStreamingDefault,
           blockStreamingBreak: agentBlockStreamingBreak,
           ...(agentTypingMode ? { typingMode: agentTypingMode } : {}),
@@ -552,6 +556,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               verificationCommands: manifest.verificationCommands,
               agentDefaultModel,
               agentVerboseDefault,
+              agentThinkingDefault,
               agentToolsDeny,
               acpAllowedAgents,
               preferredAcpAgent: acpDefaultAgent,
@@ -609,10 +614,11 @@ export function buildManifestFromEnv(env = process.env) {
     id: nonEmptyString(env.OPENCLAW_AGENT_ID, "workspace"),
     name: nonEmptyString(env.OPENCLAW_AGENT_NAME, defaultAgentName(projectName)),
     defaultModel: nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, ""),
-    verboseDefault: nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, "off"),
+    verboseDefault: nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, "on"),
+    thinkingDefault: nonEmptyString(env.OPENCLAW_AGENT_THINKING_DEFAULT, "adaptive"),
     blockStreamingDefault: nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT, "off"),
     blockStreamingBreak: nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_BREAK, "text_end"),
-    typingMode: nonEmptyString(env.OPENCLAW_AGENT_TYPING_MODE, "never"),
+    typingMode: nonEmptyString(env.OPENCLAW_AGENT_TYPING_MODE, "message"),
     typingIntervalSeconds: resolveInteger(env.OPENCLAW_AGENT_TYPING_INTERVAL_SECONDS, 12),
     maxConcurrent: resolveInteger(env.OPENCLAW_AGENTS_MAX_CONCURRENT, 4),
     skipBootstrap: resolveBoolean(env.OPENCLAW_AGENT_SKIP_BOOTSTRAP, true),
@@ -622,7 +628,7 @@ export function buildManifestFromEnv(env = process.env) {
   };
 
   const queue = {
-    mode: nonEmptyString(env.OPENCLAW_QUEUE_MODE, "collect"),
+    mode: nonEmptyString(env.OPENCLAW_QUEUE_MODE, "steer"),
     debounceMs: resolveInteger(env.OPENCLAW_QUEUE_DEBOUNCE_MS, 250),
     cap: resolveInteger(env.OPENCLAW_QUEUE_CAP, 20),
     inboundDebounceMs: resolveInteger(env.OPENCLAW_INBOUND_DEBOUNCE_MS, 150),
@@ -638,7 +644,7 @@ export function buildManifestFromEnv(env = process.env) {
     groupPolicy: nonEmptyString(env.OPENCLAW_TELEGRAM_GROUP_POLICY, "disabled"),
     streamMode: nonEmptyString(env.OPENCLAW_TELEGRAM_STREAM_MODE, "partial"),
     blockStreaming: resolveBoolean(env.OPENCLAW_TELEGRAM_BLOCK_STREAMING, false),
-    replyToMode: nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, "first"),
+    replyToMode: nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, "all"),
     reactionLevel: nonEmptyString(env.OPENCLAW_TELEGRAM_REACTION_LEVEL, "minimal"),
     proxy: nonEmptyString(env.OPENCLAW_TELEGRAM_PROXY, ""),
     configWrites: resolveBoolean(env.OPENCLAW_TELEGRAM_CONFIG_WRITES, false),

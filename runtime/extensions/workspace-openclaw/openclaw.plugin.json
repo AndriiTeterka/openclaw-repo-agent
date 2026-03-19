@@ -55,6 +55,9 @@
       "agentVerboseDefault": {
         "type": "string"
       },
+      "agentThinkingDefault": {
+        "type": "string"
+      },
       "agentToolsDeny": {
         "type": "array",
         "items": {

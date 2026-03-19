@@ -19,8 +19,7 @@ function createManifest(overrides = {}) {
     telegram: {
       dmPolicy: "pairing",
       groupPolicy: "disabled",
-      streamMode: "partial",
-      replyToMode: "first"
+      streamMode: "partial"
     },
     acp: {
       defaultAgent: "codex",
@@ -38,6 +37,12 @@ test("normalizeProjectManifest folds ACP agents into stable defaults", () => {
   const manifest = createManifest();
 
   assert.deepEqual(manifest.acp.allowedAgents, ["codex"]);
+  assert.equal(manifest.agent.verboseDefault, "on");
+  assert.equal(manifest.agent.thinkingDefault, "adaptive");
+  assert.equal(manifest.agent.typingMode, "message");
+  assert.equal(manifest.queue.mode, "steer");
+  assert.equal(manifest.telegram.replyToMode, "all");
+  assert.equal(manifest.telegram.threadBindings.spawnAcpSessions, false);
 });
 
 test("buildOpenClawConfig uses OPENCLAW_TELEGRAM_STREAM_MODE env override", () => {
@@ -64,6 +69,18 @@ test("buildOpenClawConfig preserves the codex provider model format", () => {
   const { config } = buildOpenClawConfig(manifest);
 
   assert.equal(config.agents.defaults.model.primary, "openai-codex/gpt-5.4");
+});
+
+test("buildOpenClawConfig carries thinking, typing, and queue defaults into rendered config", () => {
+  const manifest = createManifest();
+  const { config } = buildOpenClawConfig(manifest);
+
+  assert.equal(config.agents.defaults.verboseDefault, "on");
+  assert.equal(config.agents.defaults.thinkingDefault, "adaptive");
+  assert.equal(config.agents.defaults.typingMode, "message");
+  assert.equal(config.messages.queue.mode, "steer");
+  assert.equal(config.channels.telegram.replyToMode, "all");
+  assert.equal(config.channels.telegram.threadBindings, undefined);
 });
 
 test("validateProjectManifest rejects unsupported ACP agents", () => {

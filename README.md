@@ -98,11 +98,17 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 - Runtime profile: `stable-chat`
 - Queue profile: `stable-chat`
+- Default queue mode: `steer`
 - ACP backend: `acpx`
 - ACP default agent: `codex`
 - Supported ACP agents: `codex`, `claude`, `gemini`
+- Workspace verbose default: `on`
+- Workspace thinking default: `adaptive`
+- Workspace typing mode: `message`
 - Telegram DM policy: `pairing`
 - Telegram group policy: `disabled`
+- Telegram reply-to mode: `all`
+- Telegram ACP thread bindings: `disabled`
 - Auth bootstrap mode: `codex`
 - Denied tool: `process`
 

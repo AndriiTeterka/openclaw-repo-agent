@@ -104,6 +104,9 @@
         "verboseDefault": {
           "type": "string"
         },
+        "thinkingDefault": {
+          "type": "string"
+        },
         "blockStreamingDefault": {
           "type": "string"
         },

@@ -57,7 +57,10 @@ function createPromptTestPlugin() {
       dmPolicy: "pairing",
       groupPolicy: "disabled",
       streamMode: "partial",
-      replyToMode: "first",
+      replyToMode: "all",
+      threadBindings: {
+        spawnAcpSessions: false
+      },
       network: {
         autoSelectFamily: true
       }
@@ -472,7 +475,10 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
       dmPolicy: "pairing",
       groupPolicy: "disabled",
       streamMode: "partial",
-      replyToMode: "first"
+      replyToMode: "all",
+      threadBindings: {
+        spawnAcpSessions: false
+      }
     },
     acp: {
       defaultAgent: "codex",

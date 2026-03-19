@@ -648,10 +648,11 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   plugin.agent.name = String(plugin.agent.name ?? `${projectName} Workspace`).trim() || `${projectName} Workspace`;
   plugin.agent.maxConcurrent = Number.isInteger(plugin.agent.maxConcurrent) && plugin.agent.maxConcurrent > 0 ? plugin.agent.maxConcurrent : 4;
   plugin.agent.skipBootstrap = resolveBoolean(plugin.agent.skipBootstrap, true);
-  plugin.agent.verboseDefault = String(plugin.agent.verboseDefault ?? "off").trim() || "off";
+  plugin.agent.verboseDefault = String(plugin.agent.verboseDefault ?? "on").trim() || "on";
+  plugin.agent.thinkingDefault = String(plugin.agent.thinkingDefault ?? "adaptive").trim() || "adaptive";
   plugin.agent.blockStreamingDefault = String(plugin.agent.blockStreamingDefault ?? "off").trim() || "off";
   plugin.agent.blockStreamingBreak = String(plugin.agent.blockStreamingBreak ?? "text_end").trim() || "text_end";
-  plugin.agent.typingMode = String(plugin.agent.typingMode ?? "never").trim() || "never";
+  plugin.agent.typingMode = String(plugin.agent.typingMode ?? "message").trim() || "message";
   plugin.agent.typingIntervalSeconds = Number.isInteger(plugin.agent.typingIntervalSeconds) ? plugin.agent.typingIntervalSeconds : 12;
   plugin.agent.tools = {
     deny: uniqueStrings(plugin.agent.tools?.deny ?? plugin.security.toolDeny ?? ["process"])
@@ -661,7 +662,7 @@ function normalizePluginConfig(rawConfig, repoRoot, detection, options = {}) {
   plugin.telegram.groupPolicy = String(options.groupPolicy ?? plugin.telegram.groupPolicy ?? "disabled").trim() || "disabled";
   plugin.telegram.streamMode = String(options.streamMode ?? plugin.telegram.streamMode ?? "partial").trim() || "partial";
   plugin.telegram.blockStreaming = resolveBoolean(plugin.telegram.blockStreaming, false);
-  plugin.telegram.replyToMode = String(options.replyToMode ?? plugin.telegram.replyToMode ?? "first").trim() || "first";
+  plugin.telegram.replyToMode = String(options.replyToMode ?? plugin.telegram.replyToMode ?? "all").trim() || "all";
   plugin.telegram.reactionLevel = String(plugin.telegram.reactionLevel ?? "minimal").trim() || "minimal";
   plugin.telegram.configWrites = resolveBoolean(plugin.telegram.configWrites, false);
   plugin.telegram.groups = deepMerge(plugin.telegram.groups ?? { "*": { requireMention: true } });
@@ -831,9 +832,12 @@ function buildRuntimeEnv(context, plugin, manifest, localEnv, detectedCodexAuthP
     OPENCLAW_BOOTSTRAP_AUTH_MODE: manifest.security.authBootstrapMode,
     OPENCLAW_AGENT_DEFAULT_MODEL: manifest.agent.defaultModel || "",
     OPENCLAW_AGENT_VERBOSE_DEFAULT: manifest.agent.verboseDefault,
+    OPENCLAW_AGENT_THINKING_DEFAULT: manifest.agent.thinkingDefault,
     OPENCLAW_AGENT_TOOLS_DENY: JSON.stringify(manifest.agent.tools.deny),
     OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT: manifest.agent.blockStreamingDefault,
     OPENCLAW_AGENT_BLOCK_STREAMING_BREAK: manifest.agent.blockStreamingBreak,
+    OPENCLAW_AGENT_TYPING_MODE: manifest.agent.typingMode,
+    OPENCLAW_AGENT_TYPING_INTERVAL_SECONDS: String(manifest.agent.typingIntervalSeconds),
     OPENCLAW_QUEUE_MODE: manifest.queue.mode,
     OPENCLAW_QUEUE_DEBOUNCE_MS: String(manifest.queue.debounceMs),
     OPENCLAW_QUEUE_CAP: String(manifest.queue.cap),

@@ -6,7 +6,7 @@ const STABLE_TELEGRAM_DEFAULTS = {
   groupPolicy: "disabled",
   streamMode: "partial",
   blockStreaming: false,
-  replyToMode: "first",
+  replyToMode: "all",
   reactionLevel: "minimal",
   configWrites: false,
   groups: {
@@ -37,10 +37,11 @@ const STABLE_AGENT_DEFAULTS = {
   maxConcurrent: 4,
   skipBootstrap: true,
   defaultModel: "",
-  verboseDefault: "off",
+  verboseDefault: "on",
+  thinkingDefault: "adaptive",
   blockStreamingDefault: "off",
   blockStreamingBreak: "text_end",
-  typingMode: "never",
+  typingMode: "message",
   typingIntervalSeconds: 12,
   tools: {
     deny: ["process"]

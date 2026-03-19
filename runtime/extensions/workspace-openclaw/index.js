@@ -11,7 +11,8 @@ function buildSystemContext(config) {
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
   const preferredAcpMode = String(config.preferredAcpMode ?? "").trim() || "oneshot";
   const agentDefaultModel = String(config.agentDefaultModel ?? "").trim() || "not set";
-  const agentVerboseDefault = String(config.agentVerboseDefault ?? "").trim() || "off";
+  const agentVerboseDefault = String(config.agentVerboseDefault ?? "").trim() || "on";
+  const agentThinkingDefault = String(config.agentThinkingDefault ?? "").trim() || "adaptive";
   const agentToolsDeny = new Set(listOfStrings(config.agentToolsDeny));
   const workspace = String(config.workspace ?? "").trim() || "/workspace";
   const repoRoot = String(config.repoRoot ?? "").trim() || workspace;
@@ -20,7 +21,7 @@ function buildSystemContext(config) {
   const runtimeProfile = String(config.runtimeProfile ?? "").trim() || "stable-chat";
   const queueProfile = String(config.queueProfile ?? "").trim() || runtimeProfile;
   const deploymentProfile = String(config.deploymentProfile ?? "").trim() || "docker-local";
-  const queueMode = String(config.defaultQueueMode ?? "").trim() || "collect";
+  const queueMode = String(config.defaultQueueMode ?? "").trim() || "steer";
   const telegramBlockStreaming = Boolean(config.telegramBlockStreaming);
   const telegramDmPolicy = String(config.telegramDmPolicy ?? "").trim() || "pairing";
   const telegramGroupPolicy = String(config.telegramGroupPolicy ?? "").trim() || "disabled";
@@ -44,6 +45,7 @@ function buildSystemContext(config) {
     `Queue profile: ${queueProfile}`,
     `Workspace agent default model: ${agentDefaultModel}`,
     `Workspace verbose default: ${agentVerboseDefault}`,
+    `Workspace thinking default: ${agentThinkingDefault}`,
     `ACP agents enabled for this workspace: ${enabledAcpAgents.length > 0 ? enabledAcpAgents.join(", ") : "not set"}`,
     `Use ACP runtime via backend "acpx" with agentId "${preferredAcpAgent || "not set"}" for repository inspection, edits, and verification.`,
     `Prefer ACP mode "${preferredAcpMode}" unless the user explicitly asks for a different ACP mode.`,
@@ -82,7 +84,8 @@ function buildStatusReply(config, detail) {
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
   const preferredAcpMode = String(config.preferredAcpMode ?? "").trim() || "oneshot";
   const agentDefaultModel = String(config.agentDefaultModel ?? "").trim() || "not set";
-  const agentVerboseDefault = String(config.agentVerboseDefault ?? "").trim() || "off";
+  const agentVerboseDefault = String(config.agentVerboseDefault ?? "").trim() || "on";
+  const agentThinkingDefault = String(config.agentThinkingDefault ?? "").trim() || "adaptive";
   const agentToolsDeny = new Set(listOfStrings(config.agentToolsDeny));
   const projectName = String(config.projectName ?? "").trim() || "workspace";
   const workspace = String(config.workspace ?? "").trim() || "/workspace";
@@ -92,7 +95,7 @@ function buildStatusReply(config, detail) {
   const runtimeProfile = String(config.runtimeProfile ?? "").trim() || "stable-chat";
   const queueProfile = String(config.queueProfile ?? "").trim() || runtimeProfile;
   const deploymentProfile = String(config.deploymentProfile ?? "").trim() || "docker-local";
-  const queueMode = String(config.defaultQueueMode ?? "").trim() || "collect";
+  const queueMode = String(config.defaultQueueMode ?? "").trim() || "steer";
   const telegramBlockStreaming = Boolean(config.telegramBlockStreaming);
   const telegramDmPolicy = String(config.telegramDmPolicy ?? "").trim() || "pairing";
   const telegramGroupPolicy = String(config.telegramGroupPolicy ?? "").trim() || "disabled";
@@ -121,6 +124,7 @@ function buildStatusReply(config, detail) {
       `Preferred ACP mode: ${preferredAcpMode}`,
       `Workspace agent default model: ${agentDefaultModel}`,
       `Workspace verbose default: ${agentVerboseDefault}`,
+      `Workspace thinking default: ${agentThinkingDefault}`,
       `Denied tools: ${agentToolsDeny.size > 0 ? Array.from(agentToolsDeny).join(", ") : "none"}`,
       `Workspace: ${workspace}`,
       `Repo root: ${repoRoot}`,
