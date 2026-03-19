@@ -44,10 +44,16 @@
   },
   "scripts": {
     "check": "node ./cli/bin/openclaw-repo-agent.mjs config validate --repo-root ./test/fixtures/custom --product-root . --json",
+    "check:deps": "depcheck",
+    "check:unused": "knip",
     "test:unit": "node --test",
     "pack:dry-run": "npm pack --dry-run",
-    "release:check": "npm run test:unit && npm run check && npm run pack:dry-run",
+    "release:check": "npm run test:unit && npm run check && npm run check:unused && npm run check:deps && npm run pack:dry-run",
     "test": "npm run release:check",
     "prepublishOnly": "npm run release:check"
+  },
+  "devDependencies": {
+    "depcheck": "^1.4.7",
+    "knip": "^5.88.0"
   }
 }

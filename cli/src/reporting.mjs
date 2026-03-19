@@ -28,9 +28,7 @@ const REPORT_TITLE_ALIASES = {
   "Update complete": "'update' completed",
   "Verification complete": "'verify' completed",
   "Pairing complete": "'pair' completed",
-  "Pairing settings updated": "'pair' updated",
-  "MCP setup complete": "'mcp setup' completed",
-  "MCP use complete": "'mcp use' completed"
+  "Pairing settings updated": "'pair' updated"
 };
 
 function resolveReportTitle(title, status = "info") {

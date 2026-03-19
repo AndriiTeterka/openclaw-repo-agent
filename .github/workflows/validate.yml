@@ -6,6 +6,7 @@ on:
       - ".github/**"
       - "cli/**"
       - "package.json"
+      - "package-lock.json"
       - "runtime/**"
       - "schemas/**"
       - "test/**"
@@ -15,8 +16,10 @@ on:
       - ".github/**"
       - "cli/**"
       - "package.json"
+      - "package-lock.json"
       - "runtime/**"
       - "schemas/**"
+      - "test/**"
       - "README.md"
 
 jobs:

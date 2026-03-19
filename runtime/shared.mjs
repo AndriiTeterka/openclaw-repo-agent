@@ -172,7 +172,7 @@ export async function copyFileIfNewer(sourcePath, targetPath) {
   return true;
 }
 
-export async function runCommand(command, args, options = {}) {
+async function runCommand(command, args, options = {}) {
   const { cwd, env, input, timeoutMs } = options;
 
   return await new Promise((resolve, reject) => {

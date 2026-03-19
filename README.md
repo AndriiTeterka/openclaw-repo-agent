@@ -10,20 +10,12 @@ npx openclaw-repo-agent up
 npx openclaw-repo-agent pair
 ```
 
-For Codex/Docker MCP targeting, switch explicitly when needed:
-
-```bash
-npx openclaw-repo-agent mcp use
-```
-
 ## Requirements
 
 - Node.js 20 or newer
-- Docker Desktop / Docker Engine with Compose V2 and Docker MCP Toolkit
-- Codex installed locally
+- Docker Desktop / Docker Engine with Compose V2
 - A Telegram bot token for pairing flows
 - OpenAI or Codex auth inputs only when `authBootstrapMode` is set to `codex`
-- Optional: a GitHub personal access token if you want authenticated `github-official` MCP tools
 
 ## Package Contents
 
@@ -49,8 +41,6 @@ npx openclaw-repo-agent up
 npx openclaw-repo-agent pair
 ```
 
-`init` and `up` now prepare repo-local Docker MCP state and sync configured credentials into Docker MCP secrets, but they no longer repoint Docker MCP/Codex globally. Use `mcp use` explicitly when you want Codex to target the current repo.
-
 `up` now always builds the repo-local runtime image for the current instance and persists that instance-specific tag in the instance registry.
 
 Run `pair` after opening the dashboard or messaging the Telegram bot to approve the latest pending local gateway/device and Telegram pairing requests.
@@ -68,12 +58,12 @@ Telegram defaults remain repo-local and silent during bootstrap:
 
 You can still override detected repo settings and Telegram policy later in `.openclaw/config.json` or with CLI flags.
 
-The CLI writes everything under `.openclaw/`, and `.openclaw/` is git-ignored by default:
+The CLI writes everything under `.openclaw/`. In Git repos, `init` adds `.openclaw/` to `.git/info/exclude` by default:
 
 - repo config files: `.openclaw/config.json`, `.openclaw/secrets.env`
 - generated runtime files: `.openclaw/state/`
 
-If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.gitignore`.
+If you want to commit selected `.openclaw` files, remove or narrow the `.openclaw/` entry in your repo’s `.git/info/exclude`.
 
 Each initialized repo also gets a stable isolated runtime identity:
 
@@ -99,9 +89,6 @@ Configuration precedence:
 - `verify`: run configured verification commands inside the gateway container
 - `update`: rerender state, refresh the runtime image, and rerun doctor checks
 - `instances list`: show all registered repo instances on this machine plus live container state when available
-- `mcp setup`: prepare or refresh this repo's Docker MCP config and sync Docker MCP secrets
-- `mcp use`: activate this repo's Docker MCP config for Codex
-- `mcp status`: show whether this repo's Docker MCP config is active and whether Codex is targeting it
 - `config validate`: validate `.openclaw/config.json` as rendered into the runtime env
 - `config migrate`: rewrite `.openclaw/config.json` using the current CLI defaults
 
@@ -123,9 +110,9 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 
 ## Local Configuration Notes
 
-- `.openclaw/` is git-ignored by default; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
+- In Git repos, `.openclaw/` is added to `.git/info/exclude` during `init`; treat it as repo-local OpenClaw state unless you intentionally unignore parts of it.
 - `.openclaw/config.json` holds all non-secret configuration (project name, deployment profile, ACP agent, Telegram policy, etc.).
-- `.openclaw/secrets.env` holds secrets only: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `TARGET_AUTH_PATH`. `init`/`up` mirror them into Docker MCP secrets automatically.
+- `.openclaw/secrets.env` holds secrets only: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `TARGET_AUTH_PATH`.
 - `.openclaw/state/runtime.env` is generated from config + secrets + instance registry and should not be edited directly.
 - Instance identity (`OPENCLAW_INSTANCE_ID`, `OPENCLAW_GATEWAY_PORT`) is managed by the instance registry; use `up --reassign-port` or `doctor --fix` to change the gateway port.
 - `TARGET_AUTH_PATH` should point at a host path that contains Codex auth when `authBootstrapMode=codex`; it remains in secrets.env because it is a host path, not a keychain secret.
@@ -136,50 +123,8 @@ Run `npx openclaw-repo-agent --help` for the current command summary.
 - Playwright CLI workspace config lives under `.openclaw/playwright/`. Normal CLI responses stay on stdout instead of auto-generating page or console files; explicit saved artifacts go under `.openclaw/playwright/artifacts/`.
 - Docker container names are Compose-generated from the repo instance project name, for example `openclaw-<instanceId>-openclaw-gateway-1`.
 - The generated runtime env lives at `.openclaw/state/runtime.env`; the container receives all config via env vars.
-- The generated Docker MCP repo config lives at `.openclaw/state/docker-mcp.config.yaml`.
-- Docker MCP secret sync state is tracked in `.openclaw/state/docker-mcp.secrets.json`.
 - The runtime relies on the bundled `acpx` plugin shipped in the OpenClaw base image, so normal `up`, `pair`, and health-check flows do not download ACP plugins at container startup.
 - Separate Telegram bot tokens are the supported concurrent multi-repo model. `up` now refuses to start two running repo instances with the same bot token.
-
-## Docker MCP
-
-This project now treats Docker MCP as repo-scoped setup plus explicit activation.
-
-Typical setup:
-
-```bash
-npx openclaw-repo-agent init
-npx openclaw-repo-agent up
-npx openclaw-repo-agent mcp use
-```
-
-What this does:
-
-- enables `docker`, `fetch`, `filesystem`, `github-official`, and `context7`
-- prepares `.openclaw/state/docker-mcp.config.yaml` for this repo
-- mirrors configured `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and optional `GITHUB_PERSONAL_ACCESS_TOKEN` into Docker MCP secrets
-- activates the repo's Docker MCP config only when you run `mcp use`
-- reconnects Codex to `docker mcp gateway run` when you run `mcp use`
-- uses `playwright-cli` as the only supported browser automation tool for this project
-
-External pairing:
-
-```bash
-npx openclaw-repo-agent pair --gateway-url ws://gateway.example/ws --gateway-token <token>
-```
-
-- This path uses the host `openclaw devices ...` commands instead of the repo-local container.
-- `--gateway-url` should be the OpenClaw gateway WebSocket URL, not a browser dashboard URL.
-- If you omit `--approve`, the CLI approves the latest pending external device request automatically.
-
-Notes:
-
-- `mcp use` changes Docker MCP's active config pointer globally because Codex currently only supports global Docker MCP integration
-- `github-official` can be authenticated by setting `GITHUB_PERSONAL_ACCESS_TOKEN` in `.openclaw/secrets.env` and rerunning `init`, `up`, or `mcp setup`
-- `context7` is enabled permanently for version-specific documentation lookup
-- browser automation in this project should always use `playwright-cli`
-- the repo-local Docker MCP config only scopes filesystem access for this repo; the other recommended servers do not need per-repo config
-- use `mcp setup` and `mcp use` as repair commands if the repo-local config or Codex connection gets out of sync
 
 ## Multi-Repo Runtime
 
@@ -190,12 +135,6 @@ This project now supports running multiple repo-local OpenClaw gateways concurre
 - one local runtime image tag per repo instance
 - one Telegram bot token per running repo instance
 - a machine-local instance registry used by `instances list`, `status`, and `doctor`
-
-If you want to switch Codex between repos, do it explicitly:
-
-```bash
-npx openclaw-repo-agent mcp use
-```
 
 ## Development
 
@@ -209,6 +148,13 @@ Run the same publish gate explicitly without going through `npm publish`:
 
 ```bash
 npm run release:check
+```
+
+Run the structural cleanup checks directly:
+
+```bash
+npm run check:unused
+npm run check:deps
 ```
 
 Validate a consumer repo manually:
@@ -232,9 +178,9 @@ npm publishing is configured for GitHub Actions trusted publishing via [`.github
 
 Release flow:
 
-1. update `package.json` and `cli/src/builtin-profiles.mjs` to the target version
+1. update `package.json` to the target version
 2. run `npm run release:check`
-3. push a matching Git tag such as `v0.4.0`
+3. push a matching Git tag such as `vX.Y.Z`
 
 The release workflow rejects tags that do not match `package.json`, and `npm publish` is guarded by the repo's `prepublishOnly` release checks.
 

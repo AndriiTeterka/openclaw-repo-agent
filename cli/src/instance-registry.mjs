@@ -5,13 +5,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureDir, readJsonFile, writeJsonFileAtomic } from "../../runtime/shared.mjs";
-import { PRODUCT_NAME, PRODUCT_VERSION } from "./builtin-profiles.mjs";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "./product-metadata.mjs";
 
-export const INSTANCE_REGISTRY_VERSION = 1;
+const INSTANCE_REGISTRY_VERSION = 1;
 export const LEGACY_COMPOSE_PORT = 18789;
-export const LEGACY_LOCAL_RUNTIME_IMAGE = "openclaw-repo-agent-runtime:local";
-export const GATEWAY_PORT_RANGE_START = 20000;
-export const GATEWAY_PORT_RANGE_END = 39999;
+const GATEWAY_PORT_RANGE_START = 20000;
+const GATEWAY_PORT_RANGE_END = 39999;
 const MAX_REPO_SLUG_LENGTH = 45;
 const INSTANCE_HASH_LENGTH = 8;
 
@@ -25,7 +24,7 @@ function normalizeIdentityPath(value) {
   return portable || "/";
 }
 
-export function sanitizeRepoSlug(value) {
+function sanitizeRepoSlug(value) {
   const normalized = String(value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -33,14 +32,14 @@ export function sanitizeRepoSlug(value) {
   return (normalized || "openclaw").slice(0, MAX_REPO_SLUG_LENGTH);
 }
 
-export function deriveLegacyComposeProjectName(repoRoot) {
+function deriveLegacyComposeProjectName(repoRoot) {
   const normalizedRoot = toPortablePath(repoRoot).replace(/\/+$/g, "");
   const basename = path.posix.basename(normalizedRoot) || path.basename(path.resolve(repoRoot));
   const slug = sanitizeRepoSlug(basename);
   return /^[a-z0-9]/.test(slug) ? slug : `repo-${slug}`.slice(0, 63);
 }
 
-export function resolveRepoIdentityPath(repoRoot) {
+function resolveRepoIdentityPath(repoRoot) {
   const resolved = path.resolve(repoRoot);
   try {
     return normalizeIdentityPath(fs.realpathSync.native(resolved));
@@ -64,15 +63,11 @@ export function deriveComposeProjectName(repoRootOrInstanceId) {
   return `openclaw-${instanceId}`.slice(0, 63);
 }
 
-export function deriveDockerMcpProfileName(instanceId) {
-  return `openclaw-${String(instanceId ?? "").trim()}`.slice(0, 63);
-}
-
 export function deriveLocalRuntimeImage(instanceId, productVersion = PRODUCT_VERSION) {
   return `openclaw-repo-agent-runtime:${productVersion}-${String(instanceId ?? "").trim()}`;
 }
 
-export function hashInstanceValue(value) {
+function hashInstanceValue(value) {
   return crypto.createHash("sha256").update(String(value ?? "")).digest("hex");
 }
 
@@ -123,7 +118,7 @@ export async function readInstanceRegistry(registryPath = resolveInstanceRegistr
   };
 }
 
-export async function writeInstanceRegistry(registryPath, registry) {
+async function writeInstanceRegistry(registryPath, registry) {
   await ensureDir(path.dirname(registryPath));
   await writeJsonFileAtomic(registryPath, {
     version: INSTANCE_REGISTRY_VERSION,
@@ -198,7 +193,6 @@ export function buildInstanceMetadata(repoRoot) {
     instanceId,
     composeProjectName: deriveComposeProjectName(instanceId),
     legacyComposeProjectName: deriveLegacyComposeProjectName(repoRoot),
-    dockerMcpProfile: deriveDockerMcpProfileName(instanceId),
     localRuntimeImage: deriveLocalRuntimeImage(instanceId)
   };
 }
@@ -214,7 +208,6 @@ export function buildRegistryEntry(context, localEnv = {}) {
     portManaged: shouldManageGatewayPort(localEnv),
     telegramTokenHash: fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN),
     localRuntimeImage: context.localRuntimeImage,
-    dockerMcpProfile: context.dockerMcpProfile,
     lastSeenAt: new Date().toISOString()
   };
 }

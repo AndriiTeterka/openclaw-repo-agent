@@ -1,7 +1,4 @@
-export const PRODUCT_NAME = "openclaw-repo-agent";
-export const PRODUCT_VERSION = "0.4.0";
 export const DEFAULT_OPENCLAW_IMAGE = "ghcr.io/openclaw/openclaw:latest";
-export const DEFAULT_NPM_PACKAGE_NAME = PRODUCT_NAME;
 export const DEFAULT_CODEX_MODEL = "openai-codex/gpt-5.4";
 
 const STABLE_TELEGRAM_DEFAULTS = {
@@ -77,7 +74,3 @@ function baseProfile(overrides = {}) {
 export const BUILTIN_PROFILES = {
   custom: baseProfile()
 };
-
-export function listBuiltinProfileNames() {
-  return Object.keys(BUILTIN_PROFILES);
-}

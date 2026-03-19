@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "runtime/bootstrap-auth.mjs",
+    "runtime/doctor.mjs",
+    "runtime/render-openclaw-config.mjs",
+    "runtime/npx-wrapper.mjs",
+    "runtime/playwright-cli-daemon-patch.mjs",
+    "runtime/playwright-cli-wrapper.mjs",
+    "runtime/extensions/workspace-openclaw/index.js",
+    "test/**/*.mjs"
+  ]
+}

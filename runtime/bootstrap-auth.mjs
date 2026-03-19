@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { buildManifestFromEnv, normalizeAuthMode } from "./manifest-contract.mjs";
-import { copyFileIfNewer, ensureDir, fileExists, safeRunCommand, writeJsonFile } from "./shared.mjs";
+import { copyFileIfNewer, ensureDir, fileExists, readJsonFile, safeRunCommand, writeJsonFile } from "./shared.mjs";
 
 function isMissingCodexBinary(stderr = "") {
   return /ENOENT|not found|is not recognized/i.test(String(stderr ?? "").trim());

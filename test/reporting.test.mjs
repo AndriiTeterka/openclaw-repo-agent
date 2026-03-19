@@ -32,7 +32,7 @@ test("renderReport formats section-based output without ANSI when color is disab
       {
         title: "Integrations",
         items: [
-          { status: "success", text: "Docker MCP: Synced Telegram bot token" }
+          { status: "success", text: "Telegram pairing is ready" }
         ]
       },
       {
@@ -60,7 +60,7 @@ test("renderReport formats section-based output without ANSI when color is disab
   assert.match(output, /✔ Docker CLI is available\./);
   assert.match(output, /✔ Manifest rendered successfully\./);
   assert.match(output, /🔗\s+INTEGRATIONS/);
-  assert.match(output, /✔ Docker MCP: Synced Telegram bot token/);
+  assert.match(output, /✔ Telegram pairing is ready/);
   assert.match(output, /⚠️\s+WARNINGS/);
   assert.match(output, /➡️\s+TO DO NEXT/);
   assert.match(output, /› Run 'openclaw-repo-agent up' next\./);

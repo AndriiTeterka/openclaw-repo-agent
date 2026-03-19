@@ -14,6 +14,7 @@ import {
   shouldManageGatewayPort,
   upsertInstanceRegistryEntry
 } from "../cli/src/instance-registry.mjs";
+import { PRODUCT_VERSION } from "../cli/src/product-metadata.mjs";
 
 test("deriveInstanceId is stable across slash variants and distinct across parent paths", () => {
   const left = deriveInstanceId("C:\\Users\\demo\\workspace\\repo");
@@ -55,7 +56,7 @@ test("allocateGatewayPort is deterministic and skips already-assigned ports", as
 test("deriveLocalRuntimeImage scopes local builds to the instance id", () => {
   assert.equal(
     deriveLocalRuntimeImage("repo-deadbeef"),
-    "openclaw-repo-agent-runtime:0.4.0-repo-deadbeef"
+    `openclaw-repo-agent-runtime:${PRODUCT_VERSION}-repo-deadbeef`
   );
 });
 
@@ -82,8 +83,7 @@ test("instance registry stores entries atomically", async () => {
     gatewayPort: "20001",
     portManaged: true,
     telegramTokenHash: "",
-    localRuntimeImage: "openclaw-repo-agent-runtime:0.4.0-repo-one",
-    dockerMcpProfile: "openclaw-repo-one",
+    localRuntimeImage: `openclaw-repo-agent-runtime:${PRODUCT_VERSION}-repo-one`,
     lastSeenAt: "2026-03-12T00:00:00.000Z"
   });
   await upsertInstanceRegistryEntry(registryPath, {
@@ -94,8 +94,7 @@ test("instance registry stores entries atomically", async () => {
     gatewayPort: "20002",
     portManaged: true,
     telegramTokenHash: "",
-    localRuntimeImage: "openclaw-repo-agent-runtime:0.4.0-repo-two",
-    dockerMcpProfile: "openclaw-repo-two",
+    localRuntimeImage: `openclaw-repo-agent-runtime:${PRODUCT_VERSION}-repo-two`,
     lastSeenAt: "2026-03-12T00:00:01.000Z"
   });
 

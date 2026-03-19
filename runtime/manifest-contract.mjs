@@ -7,9 +7,9 @@ import {
   isSupportedAcpAgent,
   normalizeAcpAgentValue
 } from "./supported-acp-agents.mjs";
-export const SUPPORTED_DEPLOYMENT_PROFILES = ["docker-local", "wsl2", "linux-vps", "native-dev"];
-export const SUPPORTED_TOOLING_PROFILES = ["none", "java17", "node20", "python311", "go122", "polyglot"];
-export const SUPPORTED_RUNTIME_PROFILES = ["stable-chat", "interactive-steer", "topic-bound-acp", "ci-runner"];
+const SUPPORTED_DEPLOYMENT_PROFILES = ["docker-local", "wsl2", "linux-vps", "native-dev"];
+const SUPPORTED_TOOLING_PROFILES = ["none", "java17", "node20", "python311", "go122", "polyglot"];
+const SUPPORTED_RUNTIME_PROFILES = ["stable-chat", "interactive-steer", "topic-bound-acp", "ci-runner"];
 
 const RUNTIME_PROFILE_PRESETS = {
   "stable-chat": {
@@ -594,7 +594,6 @@ export function buildManifestStatus(manifest, errors = []) {
 
 /**
  * Build a manifest structure from environment variables for runtime scripts.
- * Used when project-manifest.json is not mounted (e.g. simplified config flow).
  */
 export function buildManifestFromEnv(env = process.env) {
   const gatewayPort = resolveInteger(env.OPENCLAW_GATEWAY_PORT, 18789);

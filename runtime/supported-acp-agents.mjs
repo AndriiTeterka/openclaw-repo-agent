@@ -1,4 +1,4 @@
-export const SUPPORTED_ACP_AGENTS = ["codex", "claude", "gemini"];
+const SUPPORTED_ACP_AGENTS = ["codex", "claude", "gemini"];
 
 export function normalizeAcpAgentValue(value) {
   return String(value ?? "").trim().toLowerCase();

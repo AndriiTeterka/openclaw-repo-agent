@@ -61,6 +61,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const configPath = process.env.OPENCLAW_RENDERED_CONFIG_PATH?.trim() || "/home/node/.openclaw/openclaw.json";
   const renderStatusPath = process.env.OPENCLAW_RENDER_STATUS_PATH?.trim() || "/home/node/.openclaw/runtime/render-status.json";
+  const manifestPath = "(env)";
 
   const manifest = buildManifestFromEnv(process.env);
   const validationErrors = validateProjectManifest(manifest);
@@ -92,7 +93,7 @@ async function main() {
   const renderErrors = validateRenderedConfig(nextConfig);
   const status = buildStatus({
     manifestStatus,
-    manifestPath: "(env)",
+    manifestPath,
     configPath,
     previousConfig: currentConfig,
     nextConfig,
