@@ -3,9 +3,13 @@
   "entry": [
     "runtime/bootstrap-auth.mjs",
     "runtime/doctor.mjs",
+    "runtime/entrypoint.mjs",
     "runtime/render-openclaw-config.mjs",
-    "runtime/npx-wrapper.mjs",
-    "runtime/playwright-cli-daemon-patch.mjs",
+    "runtime/apply-tooling-manifest.mjs",
+    "runtime/live-models-provider-data.mjs",
+    "runtime/openclaw-disable-plugin-auto-enable-patch.mjs",
+    "runtime/openclaw-telegram-models-patch.mjs",
+    "runtime/provider-registry.mjs",
     "runtime/playwright-cli-wrapper.mjs",
     "runtime/extensions/workspace-openclaw/index.js",
     "test/**/*.mjs"

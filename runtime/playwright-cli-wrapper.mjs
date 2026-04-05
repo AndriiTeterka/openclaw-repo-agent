@@ -5,10 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 const realCli = "/usr/local/bin/playwright-cli-real";
-const defaultConfig = "/app/.playwright/cli.config.json";
-const workspaceConfig = path.resolve(process.cwd(), ".openclaw", "playwright", "cli.config.json");
-const workspaceArtifactsDir = path.resolve(process.cwd(), ".openclaw", "playwright", "artifacts");
-const workspaceSkillDir = path.resolve(process.cwd(), ".claude", "skills", "playwright-cli");
+const workspaceConfig = process.env.OPENCLAW_PLAYWRIGHT_CONFIG_PATH?.trim()
+  || path.resolve(process.cwd(), ".openclaw", "playwright", "cli.config.json");
+const workspaceArtifactsDir = process.env.OPENCLAW_PLAYWRIGHT_ARTIFACTS_DIR?.trim()
+  || path.resolve(process.cwd(), ".openclaw", "playwright", "artifacts");
 const args = process.argv.slice(2);
 
 function hasExplicitConfig(argv) {
@@ -41,7 +41,7 @@ function firstCommand(argv) {
 
 function configuredCommand(argv) {
   const command = firstCommand(argv);
-  return command === "open" || command === "install" ? command : "";
+  return command === "open" ? command : "";
 }
 
 function artifactCommand(argv) {
@@ -49,19 +49,6 @@ function artifactCommand(argv) {
   return command === "pdf" || command === "screenshot" || command === "snapshot" || command === "state-save"
     ? command
     : "";
-}
-
-function defaultSkillSourceDir() {
-  const realCliEntry = fs.realpathSync(realCli);
-  return path.resolve(path.dirname(realCliEntry), "node_modules", "playwright", "lib", "skill");
-}
-
-async function ensureWorkspaceConfig(configPath = workspaceConfig) {
-  if (fs.existsSync(configPath)) return false;
-  if (!fs.existsSync(defaultConfig)) return false;
-  await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.promises.copyFile(defaultConfig, configPath);
-  return true;
 }
 
 function withDefaultConfig(argv, configPath = workspaceConfig) {
@@ -123,39 +110,8 @@ async function ensureArtifactDir() {
   await fs.promises.mkdir(workspaceArtifactsDir, { recursive: true });
 }
 
-async function installWorkspace(argv) {
-  const configPath = explicitConfigPath(argv) || workspaceConfig;
-  const createdConfig = await ensureWorkspaceConfig(configPath);
-  console.log(`✅ Workspace initialized at \`${process.cwd()}\`.`);
-
-  if (argv.includes("--skills")) {
-    const skillSourceDir = defaultSkillSourceDir();
-    if (!fs.existsSync(skillSourceDir)) {
-      console.error(`❌ Skills source directory not found: ${skillSourceDir}`);
-      process.exit(1);
-    }
-    await fs.promises.mkdir(path.dirname(workspaceSkillDir), { recursive: true });
-    await fs.promises.cp(skillSourceDir, workspaceSkillDir, { recursive: true });
-    console.log(`✅ Skills installed to \`${path.relative(process.cwd(), workspaceSkillDir)}\`.`);
-  }
-
-  if (createdConfig) {
-    console.log(`✅ Created default config for chromium at ${path.relative(process.cwd(), configPath)}.`);
-  }
-}
-
 async function main() {
-  const command = configuredCommand(args);
   const artifactArgs = withArtifactPaths(args);
-
-  if (!isHelpRequest(args) && command === "install") {
-    await installWorkspace(args);
-    return;
-  }
-
-  if (!isHelpRequest(args) && command === "open") {
-    await ensureWorkspaceConfig();
-  }
 
   if (!isHelpRequest(args) && artifactCommand(artifactArgs)) {
     await ensureArtifactDir();

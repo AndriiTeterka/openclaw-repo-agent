@@ -1,4 +1,6 @@
-const SUPPORTED_ACP_AGENTS = ["codex", "claude", "gemini"];
+import { SUPPORTED_PROVIDER_AGENTS } from "./adapters/provider-factory.mjs";
+
+export const SUPPORTED_ACP_AGENTS = SUPPORTED_PROVIDER_AGENTS;
 
 export function normalizeAcpAgentValue(value) {
   return String(value ?? "").trim().toLowerCase();

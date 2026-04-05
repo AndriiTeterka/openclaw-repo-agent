@@ -1,13 +1,38 @@
+import { WORKSPACE_AUTOMATION_GUIDANCE_LINES } from "../../workspace-guidance.mjs";
+
 const PLUGIN_ID = "workspace-openclaw";
 
 function listOfStrings(value) {
   if (!Array.isArray(value)) return [];
-  return value.map((entry) => String(entry)).filter(Boolean);
+  return value.map((entry) => String(entry ?? "").trim()).filter(Boolean);
 }
 
-function buildSystemContext(config) {
-  const verificationCommands = listOfStrings(config.verificationCommands);
+function renderList(label, values) {
+  const normalized = listOfStrings(values);
+  return `${label}: ${normalized.length > 0 ? normalized.join(", ") : "none"}`;
+}
+
+function buildToolingSummary(config) {
+  const lines = [];
+  const toolingProfiles = listOfStrings(config.toolingProfiles);
+  const languages = listOfStrings(config.stack?.languages);
+  const tools = listOfStrings(config.stack?.tools);
+
+  if (toolingProfiles.length > 0) lines.push(renderList("Tooling profiles", toolingProfiles));
+  if (languages.length > 0) lines.push(renderList("Stack languages", languages));
+  if (tools.length > 0) lines.push(renderList("Stack tools", tools));
+  return lines;
+}
+
+function resolveEnabledAgents(config) {
   const acpAllowedAgents = listOfStrings(config.acpAllowedAgents);
+  const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
+  return acpAllowedAgents.length > 0
+    ? acpAllowedAgents
+    : (preferredAcpAgent ? [preferredAcpAgent] : []);
+}
+
+export function buildSystemContext(config) {
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
   const preferredAcpMode = String(config.preferredAcpMode ?? "").trim() || "oneshot";
   const agentDefaultModel = String(config.agentDefaultModel ?? "").trim() || "not set";
@@ -17,7 +42,6 @@ function buildSystemContext(config) {
   const workspace = String(config.workspace ?? "").trim() || "/workspace";
   const repoRoot = String(config.repoRoot ?? "").trim() || workspace;
   const repoPath = String(config.repoPath ?? "").trim();
-  const toolingProfile = String(config.toolingProfile ?? "").trim();
   const runtimeProfile = String(config.runtimeProfile ?? "").trim() || "stable-chat";
   const queueProfile = String(config.queueProfile ?? "").trim() || runtimeProfile;
   const deploymentProfile = String(config.deploymentProfile ?? "").trim() || "docker-local";
@@ -26,23 +50,17 @@ function buildSystemContext(config) {
   const telegramDmPolicy = String(config.telegramDmPolicy ?? "").trim() || "pairing";
   const telegramGroupPolicy = String(config.telegramGroupPolicy ?? "").trim() || "disabled";
   const telegramStreamMode = String(config.telegramStreamMode ?? "").trim() || "partial";
-  const telegramAllowFrom = listOfStrings(config.telegramAllowFrom);
-  const telegramGroupAllowFrom = listOfStrings(config.telegramGroupAllowFrom);
   const telegramThreadBindingsEnabled = Boolean(config.telegramThreadBindingsEnabled);
-  const enabledAcpAgents = acpAllowedAgents.length > 0
-    ? acpAllowedAgents
-    : preferredAcpAgent
-      ? [preferredAcpAgent]
-      : [];
+  const enabledAcpAgents = resolveEnabledAgents(config);
 
   const lines = [
     `Repository workspace: ${workspace}`,
     `Repository root: ${repoRoot}`,
     repoPath ? `Host repo path: ${repoPath}` : "",
-    toolingProfile ? `Tooling profile: ${toolingProfile}` : "",
     `Deployment profile: ${deploymentProfile}`,
     `Runtime profile: ${runtimeProfile}`,
     `Queue profile: ${queueProfile}`,
+    ...buildToolingSummary(config),
     `Workspace agent default model: ${agentDefaultModel}`,
     `Workspace verbose default: ${agentVerboseDefault}`,
     `Workspace thinking default: ${agentThinkingDefault}`,
@@ -50,12 +68,9 @@ function buildSystemContext(config) {
     `Use ACP runtime via backend "acpx" with agentId "${preferredAcpAgent || "not set"}" for repository inspection, edits, and verification.`,
     `Prefer ACP mode "${preferredAcpMode}" unless the user explicitly asks for a different ACP mode.`,
     `Default inbound queue mode for this workspace is "${queueMode}".`,
-    "For browser automation in this workspace, use `playwright-cli` only. Do not use `npx playwright`.",
-    "Save screenshots and other Playwright artifacts under `.openclaw/playwright/artifacts/`. Do not create root-level folders such as `tmp-playwright/`.",
-    "In Telegram or ACP runs, avoid parallel tool calls unless they are clearly necessary; prefer one short command at a time so tool output does not stall.",
+    ...WORKSPACE_AUTOMATION_GUIDANCE_LINES,
+    "During built-in session-start prompts such as `/new` or `/reset`, do not search the workspace or read skills just to confirm missing bootstrap files. If AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, or BOOTSTRAP.md are absent, accept that and greet the user immediately in 1-3 sentences.",
     `Telegram DM policy: ${telegramDmPolicy}; group policy: ${telegramGroupPolicy}; stream mode: ${telegramStreamMode}.`,
-    telegramAllowFrom.length > 0 ? `Telegram DM allowlist entries: ${telegramAllowFrom.join(", ")}` : "",
-    telegramGroupAllowFrom.length > 0 ? `Telegram group allowlist entries: ${telegramGroupAllowFrom.join(", ")}` : "",
     "If a newer Telegram message is a fresh standalone cancellation such as \"stop\", \"cancel\", or \"dont fix\", treat it as cancellation and avoid any further edits or verification after the next tool boundary.",
     "If a cancellation arrives after edits or verification already finished, do not claim that nothing changed. State that the prior run already completed, summarize what changed, and offer to revert it if the user wants.",
     agentToolsDeny.has("process")
@@ -70,17 +85,10 @@ function buildSystemContext(config) {
       : "Telegram ACP thread bindings are disabled by default; use oneshot ACP turns or explicit /acp commands instead of assuming thread-bound ACP sessions.",
   ];
 
-  if (verificationCommands.length > 0) {
-    lines.push("Run these verification commands after code changes when relevant:");
-    for (const command of verificationCommands) lines.push(`- ${command}`);
-  }
-
   return lines.filter(Boolean).join("\n");
 }
 
-function buildStatusReply(config, detail) {
-  const verificationCommands = listOfStrings(config.verificationCommands);
-  const acpAllowedAgents = listOfStrings(config.acpAllowedAgents);
+export function buildStatusReply(config, detail) {
   const preferredAcpAgent = String(config.preferredAcpAgent ?? "").trim();
   const preferredAcpMode = String(config.preferredAcpMode ?? "").trim() || "oneshot";
   const agentDefaultModel = String(config.agentDefaultModel ?? "").trim() || "not set";
@@ -91,7 +99,6 @@ function buildStatusReply(config, detail) {
   const workspace = String(config.workspace ?? "").trim() || "/workspace";
   const repoRoot = String(config.repoRoot ?? "").trim() || workspace;
   const repoPath = String(config.repoPath ?? "").trim();
-  const toolingProfile = String(config.toolingProfile ?? "").trim() || "none";
   const runtimeProfile = String(config.runtimeProfile ?? "").trim() || "stable-chat";
   const queueProfile = String(config.queueProfile ?? "").trim() || runtimeProfile;
   const deploymentProfile = String(config.deploymentProfile ?? "").trim() || "docker-local";
@@ -101,69 +108,35 @@ function buildStatusReply(config, detail) {
   const telegramGroupPolicy = String(config.telegramGroupPolicy ?? "").trim() || "disabled";
   const telegramStreamMode = String(config.telegramStreamMode ?? "").trim() || "partial";
   const telegramThreadBindingsEnabled = Boolean(config.telegramThreadBindingsEnabled);
-  const enabledAcpAgents = acpAllowedAgents.length > 0
-    ? acpAllowedAgents
-    : preferredAcpAgent
-      ? [preferredAcpAgent]
-      : [];
+  const enabledAcpAgents = resolveEnabledAgents(config);
+  const toolingSummary = buildToolingSummary(config);
 
   const detailMode = String(detail ?? "summary").trim() || "summary";
-  if (detailMode === "verification") {
-    return verificationCommands.length > 0
-      ? `Verification commands:\n${verificationCommands.map((command) => `- ${command}`).join("\n")}`
-      : "No verification commands are configured for this workspace.";
-  }
-
-  if (detailMode === "runtime") {
-    return [
-      `Deployment profile: ${deploymentProfile}`,
-      `Runtime profile: ${runtimeProfile}`,
-      `Queue profile: ${queueProfile}`,
-      `ACP default agent: ${preferredAcpAgent || "not set"}`,
-      `ACP allowed agents: ${enabledAcpAgents.length > 0 ? enabledAcpAgents.join(", ") : "not set"}`,
-      `Preferred ACP mode: ${preferredAcpMode}`,
-      `Workspace agent default model: ${agentDefaultModel}`,
-      `Workspace verbose default: ${agentVerboseDefault}`,
-      `Workspace thinking default: ${agentThinkingDefault}`,
-      `Denied tools: ${agentToolsDeny.size > 0 ? Array.from(agentToolsDeny).join(", ") : "none"}`,
-      `Workspace: ${workspace}`,
-      `Repo root: ${repoRoot}`,
-      repoPath ? `Host repo path: ${repoPath}` : "",
-      `Tooling profile: ${toolingProfile}`,
-      `Default queue mode: ${queueMode}`,
-      `Telegram DM policy: ${telegramDmPolicy}`,
-      `Telegram group policy: ${telegramGroupPolicy}`,
-      `Telegram stream mode: ${telegramStreamMode}`,
-      `Telegram block streaming: ${telegramBlockStreaming ? "enabled" : "disabled"}`,
-      `Telegram ACP topic bindings: ${telegramThreadBindingsEnabled ? "enabled" : "disabled"}`,
-      "Run `/acp doctor` to verify backend health.",
-    ].filter(Boolean).join("\n");
-  }
-
-  return [
-    `Project: ${projectName}`,
-    `Workspace: ${workspace}`,
-    `Repo root: ${repoRoot}`,
-    repoPath ? `Host repo path: ${repoPath}` : "",
+  const lines = [
     `Deployment profile: ${deploymentProfile}`,
-    `Tooling profile: ${toolingProfile}`,
     `Runtime profile: ${runtimeProfile}`,
     `Queue profile: ${queueProfile}`,
+    ...toolingSummary,
     `ACP default agent: ${preferredAcpAgent || "not set"}`,
     `ACP allowed agents: ${enabledAcpAgents.length > 0 ? enabledAcpAgents.join(", ") : "not set"}`,
     `Preferred ACP mode: ${preferredAcpMode}`,
     `Workspace agent default model: ${agentDefaultModel}`,
     `Workspace verbose default: ${agentVerboseDefault}`,
+    ...(detailMode === "runtime" ? [`Workspace thinking default: ${agentThinkingDefault}`] : []),
     `Denied tools: ${agentToolsDeny.size > 0 ? Array.from(agentToolsDeny).join(", ") : "none"}`,
+    detailMode === "runtime" ? `Workspace: ${workspace}` : `Project: ${projectName}`,
+    `Repo root: ${repoRoot}`,
+    repoPath ? `Host repo path: ${repoPath}` : "",
     `Default queue mode: ${queueMode}`,
     `Telegram DM policy: ${telegramDmPolicy}`,
     `Telegram group policy: ${telegramGroupPolicy}`,
     `Telegram stream mode: ${telegramStreamMode}`,
     `Telegram block streaming: ${telegramBlockStreaming ? "enabled" : "disabled"}`,
     `Telegram ACP topic bindings: ${telegramThreadBindingsEnabled ? "enabled" : "disabled"}`,
-    `Verification commands: ${verificationCommands.length}`,
-    "Details: `/repo-status verification` or `/repo-status runtime`.",
-  ].filter(Boolean).join("\n");
+    detailMode === "runtime" ? "Run `/acp doctor` to verify backend health." : "Details: `/repo-status runtime`.",
+  ];
+
+  return lines.filter(Boolean).join("\n");
 }
 
 const plugin = {

@@ -7,93 +7,58 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "projectName": {
-        "type": "string"
-      },
-      "workspace": {
-        "type": "string"
-      },
-      "repoPath": {
-        "type": "string"
-      },
-      "repoRoot": {
-        "type": "string"
-      },
-      "deploymentProfile": {
-        "type": "string"
-      },
-      "runtimeProfile": {
-        "type": "string"
-      },
-      "queueProfile": {
-        "type": "string"
-      },
-      "toolingProfile": {
-        "type": "string"
-      },
-      "verificationCommands": {
+      "projectName": { "type": "string" },
+      "workspace": { "type": "string" },
+      "repoPath": { "type": "string" },
+      "repoRoot": { "type": "string" },
+      "deploymentProfile": { "type": "string" },
+      "runtimeProfile": { "type": "string" },
+      "queueProfile": { "type": "string" },
+      "toolingProfiles": {
         "type": "array",
-        "items": {
-          "type": "string"
+        "items": { "type": "string" }
+      },
+      "stack": {
+        "type": "object",
+        "required": ["languages", "tools"],
+        "properties": {
+          "languages": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "tools": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
         }
       },
       "acpAllowedAgents": {
         "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "items": { "type": "string" }
       },
-      "preferredAcpAgent": {
-        "type": "string"
-      },
-      "preferredAcpMode": {
-        "type": "string"
-      },
-      "agentDefaultModel": {
-        "type": "string"
-      },
-      "agentVerboseDefault": {
-        "type": "string"
-      },
-      "agentThinkingDefault": {
-        "type": "string"
-      },
+      "preferredAcpAgent": { "type": "string" },
+      "preferredAcpMode": { "type": "string" },
+      "agentDefaultModel": { "type": "string" },
+      "agentVerboseDefault": { "type": "string" },
+      "agentThinkingDefault": { "type": "string" },
       "agentToolsDeny": {
         "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "items": { "type": "string" }
       },
-      "telegramBlockStreaming": {
-        "type": "boolean"
-      },
-      "telegramDmPolicy": {
-        "type": "string"
-      },
-      "telegramGroupPolicy": {
-        "type": "string"
-      },
+      "telegramBlockStreaming": { "type": "boolean" },
+      "telegramDmPolicy": { "type": "string" },
+      "telegramGroupPolicy": { "type": "string" },
       "telegramAllowFrom": {
         "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "items": { "type": "string" }
       },
       "telegramGroupAllowFrom": {
         "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "items": { "type": "string" }
       },
-      "telegramStreamMode": {
-        "type": "string"
-      },
-      "telegramThreadBindingsEnabled": {
-        "type": "boolean"
-      },
-      "defaultQueueMode": {
-        "type": "string"
-      }
+      "telegramStreamMode": { "type": "string" },
+      "telegramThreadBindingsEnabled": { "type": "boolean" },
+      "defaultQueueMode": { "type": "string" }
     }
   }
 }

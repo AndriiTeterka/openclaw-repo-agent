@@ -1,14 +1,37 @@
 import os from "node:os";
-import path from "node:path";
 
-import { deepMerge, isPlainObject, normalizePrincipalArray, parseStringArrayEnv, resolveBoolean, resolveInteger, uniqueStrings } from "./shared.mjs";
+import {
+  deepMerge,
+  deriveDefaultAgentName,
+  deriveProjectRootName,
+  isPlainObject,
+  normalizePrincipalArray,
+  parseStringArrayEnv,
+  resolveBoolean,
+  resolveInteger,
+  uniqueStrings
+} from "./shared.mjs";
+import {
+  createEmptyStack,
+  normalizeStack,
+  normalizeToolingProfiles,
+  parseStackEnv,
+  parseToolingProfilesEnv,
+  validateToolingProfiles,
+} from "./tooling-stack.mjs";
+import {
+  buildAllProvidersModelCatalog,
+  buildCurrentProviderModelCatalog,
+  getLatestCurrentProviderModel,
+  resolvePrimaryModelRef,
+  resolveDefaultModelProvider
+} from "./model-catalog.mjs";
 import {
   formatSupportedAcpAgents,
   isSupportedAcpAgent,
   normalizeAcpAgentValue
 } from "./supported-acp-agents.mjs";
-const SUPPORTED_DEPLOYMENT_PROFILES = ["docker-local", "wsl2", "linux-vps", "native-dev"];
-const SUPPORTED_TOOLING_PROFILES = ["none", "java17", "node20", "python311", "go122", "polyglot"];
+const SUPPORTED_DEPLOYMENT_PROFILES = ["docker-local", "wsl2", "linux-vps"];
 const SUPPORTED_RUNTIME_PROFILES = ["stable-chat", "interactive-steer", "topic-bound-acp", "ci-runner"];
 
 const RUNTIME_PROFILE_PRESETS = {
@@ -44,14 +67,11 @@ const RUNTIME_PROFILE_PRESETS = {
     telegram: {
       enabled: true,
       dmPolicy: "pairing",
-      allowFrom: [],
       groupPolicy: "disabled",
-      groupAllowFrom: [],
       streamMode: "partial",
       blockStreaming: false,
       replyToMode: "all",
       reactionLevel: "minimal",
-      proxy: "",
       configWrites: false,
       network: {
         autoSelectFamily: true,
@@ -134,6 +154,72 @@ const RUNTIME_PROFILE_PRESETS = {
   },
 };
 
+export const DEFAULT_PROJECT_CONFIG = Object.freeze({
+  projectName: "workspace",
+  deploymentProfile: "",
+  toolingProfiles: [],
+  tooling: {
+    installScripts: [],
+    allowUnsafeCommands: false,
+  },
+  stack: createEmptyStack(),
+  runtimeProfile: "stable-chat",
+  queueProfile: "stable-chat",
+  agent: {
+    id: "workspace",
+    name: "",
+    maxConcurrent: 4,
+    skipBootstrap: true,
+    defaultModel: "",
+    installScripts: [],
+    verboseDefault: "on",
+    thinkingDefault: "adaptive",
+    blockStreamingDefault: "off",
+    blockStreamingBreak: "text_end",
+    typingMode: "message",
+    typingIntervalSeconds: 12,
+    tools: {
+      deny: ["process"],
+    },
+  },
+  telegram: {
+    dmPolicy: "pairing",
+    groupPolicy: "disabled",
+    streamMode: "partial",
+    blockStreaming: false,
+    replyToMode: "all",
+    reactionLevel: "minimal",
+    configWrites: false,
+    groups: {
+      "*": {
+        requireMention: true,
+      },
+    },
+    threadBindings: {
+      spawnAcpSessions: false,
+    },
+    network: {
+      autoSelectFamily: true,
+    },
+  },
+  acp: {
+    defaultAgent: "codex",
+    allowedAgents: [],
+    preferredMode: "oneshot",
+    maxConcurrentSessions: 4,
+    ttlMinutes: 120,
+    stream: {
+      coalesceIdleMs: 300,
+      maxChunkChars: 1200,
+    },
+  },
+  security: {
+    authBootstrapMode: "codex",
+    commandLoggerEnabled: true,
+    toolDeny: ["process"],
+  },
+});
+
 function nonEmptyString(value, fallback = "") {
   const trimmed = String(value ?? "").trim();
   return trimmed || fallback;
@@ -144,9 +230,15 @@ function toStringArray(value, fallback = []) {
   return value.map((entry) => String(entry ?? "").trim()).filter(Boolean);
 }
 
-function defaultAgentName(projectName) {
-  const normalizedProjectName = String(projectName ?? "").trim();
-  return normalizedProjectName ? `${normalizedProjectName} Workspace` : "Workspace";
+function defaultAgentName(projectName, repoPath) {
+  return deriveDefaultAgentName(projectName, repoPath);
+}
+
+function resolveProviderPluginId(acpAgent) {
+  const normalized = String(acpAgent ?? "").trim().toLowerCase();
+  if (normalized === "codex") return "openai";
+  if (normalized === "gemini") return "google";
+  return "";
 }
 
 export function defaultDeploymentProfile(hostPlatform = os.platform()) {
@@ -154,10 +246,7 @@ export function defaultDeploymentProfile(hostPlatform = os.platform()) {
 }
 
 function defaultProjectName(repoPath) {
-  const normalized = String(repoPath ?? "").trim();
-  if (!normalized) return "workspace";
-  const parts = normalized.split(/[\\/]+/).filter(Boolean);
-  return parts.at(-1) || "workspace";
+  return deriveProjectRootName(repoPath);
 }
 
 function getRuntimePreset(name) {
@@ -189,10 +278,17 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   const repoPath = nonEmptyString(rawManifest.repoPath, ".");
   const projectName = nonEmptyString(rawManifest.projectName, defaultProjectName(repoPath));
   const deploymentProfile = nonEmptyString(rawManifest.deploymentProfile, defaultDeploymentProfile(hostPlatform));
-  const toolingProfile = nonEmptyString(rawManifest.toolingProfile, "none");
-  const verificationCommands = uniqueStrings(toStringArray(rawManifest.verificationCommands, []));
+  const toolingProfiles = normalizeToolingProfiles(rawManifest.toolingProfiles);
+  const stack = normalizeStack(rawManifest.stack);
 
   const security = deepMerge(runtimePreset.security, isPlainObject(rawManifest.security) ? rawManifest.security : {});
+  const tooling = deepMerge(
+    {
+      installScripts: [],
+      allowUnsafeCommands: false
+    },
+    isPlainObject(rawManifest.tooling) ? rawManifest.tooling : {}
+  );
   const agent = deepMerge(runtimePreset.agent, isPlainObject(rawManifest.agent) ? rawManifest.agent : {});
   const telegramInput = isPlainObject(rawManifest.telegram) ? rawManifest.telegram : {};
   const telegram = deepMerge(runtimePreset.telegram, telegramInput);
@@ -206,9 +302,6 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
     ...toStringArray(acp.defaultAgent ? [acp.defaultAgent] : [], []).map((value) => normalizeAcpAgentValue(value)),
   ]);
 
-  telegram.allowFrom = normalizePrincipalArray(toStringArray(telegram.allowFrom));
-  telegram.groupAllowFrom = normalizePrincipalArray(toStringArray(telegram.groupAllowFrom));
-  telegram.proxy = nonEmptyString(telegram.proxy, "");
   telegram.groups = normalizeGroups(telegram.groups, runtimePreset.telegram?.groups ?? {});
   telegram.threadBindings = {
     spawnAcpSessions: resolveBoolean(telegram.threadBindings?.spawnAcpSessions, false),
@@ -219,8 +312,9 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   telegram.streamMode = nonEmptyString(telegram.streamMode, "partial");
 
   agent.id = nonEmptyString(agent.id, "workspace");
-  agent.name = nonEmptyString(agent.name, defaultAgentName(projectName));
+  agent.name = nonEmptyString(agent.name, defaultAgentName(projectName, repoPath));
   agent.defaultModel = nonEmptyString(agent.defaultModel, "");
+  agent.installScripts = toStringArray(agent.installScripts, []);
   agent.verboseDefault = nonEmptyString(agent.verboseDefault, "on");
   agent.thinkingDefault = nonEmptyString(agent.thinkingDefault, "adaptive");
   agent.blockStreamingDefault = nonEmptyString(agent.blockStreamingDefault, "off");
@@ -258,17 +352,19 @@ export function normalizeProjectManifest(rawManifest = {}, options = {}) {
   security.authBootstrapMode = nonEmptyString(security.authBootstrapMode, "external");
   security.commandLoggerEnabled = resolveBoolean(security.commandLoggerEnabled, true);
   security.toolDeny = uniqueStrings(toStringArray(security.toolDeny, ["process"]));
+  tooling.installScripts = toStringArray(tooling.installScripts, []);
+  tooling.allowUnsafeCommands = resolveBoolean(tooling.allowUnsafeCommands, false);
 
   return {
-    version: resolveInteger(rawManifest.version, 1),
     projectName,
     repoPath,
     deploymentProfile,
-    toolingProfile,
+    toolingProfiles,
+    tooling,
+    stack,
     toolingInstallCommand: nonEmptyString(rawManifest.toolingInstallCommand, ""),
     runtimeProfile,
     queueProfile,
-    verificationCommands,
     agent,
     queue,
     telegram,
@@ -285,15 +381,24 @@ function pushError(errors, condition, message) {
 
 export function validateProjectManifest(manifest) {
   const errors = [];
-  pushError(errors, Number(manifest.version) === 1, "version must be 1");
   pushError(errors, Boolean(manifest.projectName), "projectName is required");
   pushError(errors, Boolean(manifest.repoPath), "repoPath is required");
   pushError(errors, SUPPORTED_DEPLOYMENT_PROFILES.includes(manifest.deploymentProfile), `deploymentProfile must be one of ${SUPPORTED_DEPLOYMENT_PROFILES.join(", ")}`);
-  pushError(errors, SUPPORTED_TOOLING_PROFILES.includes(manifest.toolingProfile), `toolingProfile must be one of ${SUPPORTED_TOOLING_PROFILES.join(", ")}`);
+  pushError(errors, Array.isArray(manifest.toolingProfiles), "toolingProfiles must be an array");
+  pushError(errors, validateToolingProfiles(manifest.toolingProfiles), "toolingProfiles must contain only supported versioned tooling profiles");
+  pushError(errors, Array.isArray(manifest.tooling?.installScripts), "tooling.installScripts must be an array");
+  pushError(
+    errors,
+    Array.isArray(manifest.tooling?.installScripts) && manifest.tooling.installScripts.every((entry) => typeof entry === "string"),
+    "tooling.installScripts must contain only strings"
+  );
+  pushError(errors, typeof manifest.tooling?.allowUnsafeCommands === "boolean", "tooling.allowUnsafeCommands must be a boolean");
   pushError(errors, SUPPORTED_RUNTIME_PROFILES.includes(manifest.runtimeProfile), `runtimeProfile must be one of ${SUPPORTED_RUNTIME_PROFILES.join(", ")}`);
   pushError(errors, SUPPORTED_RUNTIME_PROFILES.includes(manifest.queueProfile), `queueProfile must be one of ${SUPPORTED_RUNTIME_PROFILES.join(", ")}`);
-  pushError(errors, Array.isArray(manifest.verificationCommands), "verificationCommands must be an array");
+  pushError(errors, Array.isArray(manifest.stack?.languages), "stack.languages must be an array");
+  pushError(errors, Array.isArray(manifest.stack?.tools), "stack.tools must be an array");
   pushError(errors, Boolean(manifest.agent?.id), "agent.id is required");
+  pushError(errors, Array.isArray(manifest.agent?.installScripts), "agent.installScripts must be an array");
   pushError(errors, Number.isInteger(manifest.agent?.maxConcurrent) && manifest.agent.maxConcurrent > 0, "agent.maxConcurrent must be a positive integer");
   pushError(errors, ["collect", "steer"].includes(manifest.queue?.mode), "queue.mode must be collect or steer");
   pushError(errors, Number.isInteger(manifest.queue?.debounceMs) && manifest.queue.debounceMs >= 0, "queue.debounceMs must be >= 0");
@@ -313,14 +418,14 @@ export function validateProjectManifest(manifest) {
   );
   pushError(errors, Number.isInteger(manifest.acp?.maxConcurrentSessions) && manifest.acp.maxConcurrentSessions > 0, "acp.maxConcurrentSessions must be > 0");
   pushError(errors, Number.isInteger(manifest.tools?.exec?.timeoutSec) && manifest.tools.exec.timeoutSec > 0, "tools.exec.timeoutSec must be > 0");
-  pushError(errors, ["codex", "external", "none"].includes(normalizeAuthMode(manifest.security?.authBootstrapMode)), "security.authBootstrapMode must be codex, external, or none");
+  pushError(errors, ["codex", "gemini", "copilot", "external", "none"].includes(normalizeAuthMode(manifest.security?.authBootstrapMode)), "security.authBootstrapMode must be codex, gemini, copilot, external, or none");
   return errors;
 }
 
 export function normalizeAuthMode(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return "external";
-  if (["external", "none", "codex"].includes(normalized)) return normalized;
+  if (["external", "none", "codex", "gemini", "copilot"].includes(normalized)) return normalized;
   if (["off", "skip"].includes(normalized)) return "none";
   return normalized;
 }
@@ -341,16 +446,59 @@ export function buildOpenClawConfig(manifest, env = process.env) {
     env.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS,
     defaultControlUiOrigins(gatewayPort),
   );
-  const pluginId = nonEmptyString(env.OPENCLAW_WORKSPACE_PLUGIN_ID ?? env.OPENCLAW_REPO_PLUGIN_ID, "workspace-openclaw");
-  const pluginPath = nonEmptyString(
-    env.OPENCLAW_WORKSPACE_PLUGIN_PATH ?? env.OPENCLAW_REPO_PLUGIN_PATH,
-    "/opt/openclaw/plugins/workspace-openclaw",
-  );
+  const pluginId = nonEmptyString(env.OPENCLAW_WORKSPACE_PLUGIN_ID, "workspace-openclaw");
+  const pluginPath = nonEmptyString(env.OPENCLAW_WORKSPACE_PLUGIN_PATH, "/opt/openclaw/plugins/workspace-openclaw");
+  const authBootstrapMode = nonEmptyString(env.OPENCLAW_BOOTSTRAP_AUTH_MODE, manifest.security.authBootstrapMode);
+  const acpDefaultAgent = nonEmptyString(env.OPENCLAW_ACP_DEFAULT_AGENT, manifest.acp.defaultAgent);
+  const providerPluginId = resolveProviderPluginId(acpDefaultAgent);
+  const fallbackModelProvider = resolveDefaultModelProvider({
+    defaultAgent: acpDefaultAgent,
+    authMode: authBootstrapMode,
+    env
+  });
 
   const agentId = nonEmptyString(env.OPENCLAW_AGENT_ID, manifest.agent.id);
   const agentName = nonEmptyString(env.OPENCLAW_AGENT_NAME, manifest.agent.name);
   const agentDir = nonEmptyString(env.OPENCLAW_AGENT_DIR, manifest.agent.agentDir || `/home/node/.openclaw/agents/${agentId}/agent`);
-  const agentDefaultModel = nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, manifest.agent.defaultModel);
+  const acpAllowedAgents = uniqueStrings([
+    acpDefaultAgent,
+    ...parseStringArrayEnv(env.OPENCLAW_ACP_ALLOWED_AGENTS, manifest.acp.allowedAgents),
+  ]);
+  const configuredAgentDefaultModel = nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, manifest.agent.defaultModel);
+  const agentModelCatalog = acpAllowedAgents.length > 1
+    ? buildAllProvidersModelCatalog({
+        allowedAgents: acpAllowedAgents,
+        defaultAgent: acpDefaultAgent,
+        defaultModel: configuredAgentDefaultModel,
+        authMode: authBootstrapMode,
+        env
+      })
+    : buildCurrentProviderModelCatalog({
+        provider: fallbackModelProvider,
+        defaultAgent: acpDefaultAgent,
+        defaultModel: configuredAgentDefaultModel,
+        authMode: authBootstrapMode,
+        env
+      });
+  const startupSafeCopilotDefaultModel = fallbackModelProvider === "github-copilot"
+    && resolveBoolean(env.OPENCLAW_MODEL_DISCOVERY_COPILOT_DISABLE_PROBES, false)
+    ? getLatestCurrentProviderModel(fallbackModelProvider, env)
+    : "";
+  const agentDefaultModel = resolvePrimaryModelRef({
+    provider: fallbackModelProvider,
+    defaultAgent: acpDefaultAgent,
+    defaultModel: configuredAgentDefaultModel,
+    authMode: authBootstrapMode,
+    catalog: startupSafeCopilotDefaultModel
+      ? { [startupSafeCopilotDefaultModel]: {} }
+      : (
+          fallbackModelProvider === "github-copilot"
+          && resolveBoolean(env.OPENCLAW_MODEL_DISCOVERY_COPILOT_DISABLE_PROBES, false)
+            ? {}
+            : agentModelCatalog
+        ),
+    env,
+  });
   const agentVerboseDefault = nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, manifest.agent.verboseDefault);
   const agentThinkingDefault = nonEmptyString(env.OPENCLAW_AGENT_THINKING_DEFAULT, manifest.agent.thinkingDefault);
   const agentBlockStreamingDefault = nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT, manifest.agent.blockStreamingDefault);
@@ -377,13 +525,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
     env.OPENCLAW_TELEGRAM_AUTO_SELECT_FAMILY,
     manifest.telegram.network.autoSelectFamily,
   );
-  const telegramProxy = nonEmptyString(env.OPENCLAW_TELEGRAM_PROXY, manifest.telegram.proxy);
-
-  const acpDefaultAgent = nonEmptyString(env.OPENCLAW_ACP_DEFAULT_AGENT, manifest.acp.defaultAgent);
-  const acpAllowedAgents = uniqueStrings([
-    acpDefaultAgent,
-    ...parseStringArrayEnv(env.OPENCLAW_ACP_ALLOWED_AGENTS, manifest.acp.allowedAgents),
-  ]);
   const acpPreferredMode = nonEmptyString(env.OPENCLAW_ACP_PREFERRED_MODE, manifest.acp.preferredMode);
   const acpMaxConcurrentSessions = resolveInteger(env.OPENCLAW_ACP_MAX_CONCURRENT_SESSIONS, manifest.acp.maxConcurrentSessions);
   const acpTtlMinutes = resolveInteger(env.OPENCLAW_ACP_TTL_MINUTES, manifest.acp.ttlMinutes);
@@ -392,6 +533,8 @@ export function buildOpenClawConfig(manifest, env = process.env) {
 
   const acpxPermissionMode = nonEmptyString(env.OPENCLAW_ACPX_PERMISSION_MODE, "approve-all");
   const acpxNonInteractivePermissions = nonEmptyString(env.OPENCLAW_ACPX_NON_INTERACTIVE_PERMISSIONS, "fail");
+  const acpxCommand = nonEmptyString(env.OPENCLAW_ACPX_COMMAND, "");
+  const acpxExpectedVersion = nonEmptyString(env.OPENCLAW_ACPX_EXPECTED_VERSION, "");
   const execTimeoutSec = resolveInteger(env.OPENCLAW_EXEC_TIMEOUT_SEC, manifest.tools.exec.timeoutSec);
 
   const bootstrapFiles = [
@@ -417,9 +560,11 @@ export function buildOpenClawConfig(manifest, env = process.env) {
                 model: {
                   primary: agentDefaultModel,
                 },
-                models: {
-                  [agentDefaultModel]: {},
-                },
+                ...(Object.keys(agentModelCatalog).length > 0
+                  ? {
+                      models: agentModelCatalog,
+                    }
+                  : {}),
               }
             : {}),
           verboseDefault: agentVerboseDefault,
@@ -470,9 +615,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
         telegram: {
           enabled: telegramEnabled,
           dmPolicy: telegramDmPolicy,
-          ...(manifest.telegram.allowFrom.length > 0 ? { allowFrom: manifest.telegram.allowFrom } : {}),
           groupPolicy: telegramGroupPolicy,
-          ...(manifest.telegram.groupAllowFrom.length > 0 ? { groupAllowFrom: manifest.telegram.groupAllowFrom } : {}),
           streamMode: telegramStreamMode,
           blockStreaming: telegramBlockStreaming,
           replyToMode: telegramReplyToMode,
@@ -482,7 +625,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
           network: {
             autoSelectFamily: telegramNetworkAutoSelectFamily,
           },
-          ...(telegramProxy ? { proxy: telegramProxy } : {}),
           ...(manifest.telegram.threadBindings.spawnAcpSessions
             ? {
                 threadBindings: {
@@ -530,7 +672,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
         },
       },
       plugins: {
-        allow: ["acpx", pluginId],
+        allow: uniqueStrings(["acpx", "telegram", providerPluginId, pluginId].filter(Boolean)),
         load: {
           paths: [pluginPath],
         },
@@ -538,10 +680,24 @@ export function buildOpenClawConfig(manifest, env = process.env) {
           acpx: {
             enabled: true,
             config: {
+              ...(acpxCommand ? { command: acpxCommand } : {}),
+              ...(acpxExpectedVersion ? { expectedVersion: acpxExpectedVersion } : {}),
               permissionMode: acpxPermissionMode,
               nonInteractivePermissions: acpxNonInteractivePermissions,
             },
           },
+          telegram: {
+            enabled: telegramEnabled,
+            config: {},
+          },
+          ...(providerPluginId
+            ? {
+                [providerPluginId]: {
+                  enabled: true,
+                  config: {},
+                },
+              }
+            : {}),
           [pluginId]: {
             enabled: true,
             config: {
@@ -552,8 +708,8 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               queueProfile: manifest.queueProfile,
               workspace,
               repoRoot,
-              toolingProfile: manifest.toolingProfile,
-              verificationCommands: manifest.verificationCommands,
+              toolingProfiles: manifest.toolingProfiles,
+              stack: manifest.stack,
               agentDefaultModel,
               agentVerboseDefault,
               agentThinkingDefault,
@@ -564,8 +720,6 @@ export function buildOpenClawConfig(manifest, env = process.env) {
               telegramBlockStreaming,
               telegramDmPolicy,
               telegramGroupPolicy,
-              telegramAllowFrom: manifest.telegram.allowFrom,
-              telegramGroupAllowFrom: manifest.telegram.groupAllowFrom,
               telegramStreamMode,
               telegramThreadBindingsEnabled: manifest.telegram.threadBindings.spawnAcpSessions,
               defaultQueueMode: queueMode,
@@ -586,13 +740,13 @@ export function buildOpenClawConfig(manifest, env = process.env) {
 
 export function buildManifestStatus(manifest, errors = []) {
   return {
-    manifestVersion: manifest.version,
     projectName: manifest.projectName,
     repoPath: manifest.repoPath,
     deploymentProfile: manifest.deploymentProfile,
     runtimeProfile: manifest.runtimeProfile,
     queueProfile: manifest.queueProfile,
-    toolingProfile: manifest.toolingProfile,
+    toolingProfiles: manifest.toolingProfiles,
+    stack: manifest.stack,
     errors,
   };
 }
@@ -602,18 +756,20 @@ export function buildManifestStatus(manifest, errors = []) {
  */
 export function buildManifestFromEnv(env = process.env) {
   const gatewayPort = resolveInteger(env.OPENCLAW_GATEWAY_PORT, 18789);
-  const projectName = nonEmptyString(env.OPENCLAW_PROJECT_NAME, "workspace");
   const repoPath = nonEmptyString(env.OPENCLAW_REPO_ROOT, ".");
+  const repoIdentityPath = nonEmptyString(env.OPENCLAW_REPO_ROOT_HOST, repoPath);
+  const projectName = nonEmptyString(env.OPENCLAW_PROJECT_NAME, defaultProjectName(repoIdentityPath));
   const runtimeProfile = nonEmptyString(env.OPENCLAW_RUNTIME_PROFILE, "stable-chat");
   const queueProfile = nonEmptyString(env.OPENCLAW_QUEUE_PROFILE, runtimeProfile);
-  const toolingProfile = nonEmptyString(env.OPENCLAW_TOOLING_PROFILE, "none");
   const deploymentProfile = nonEmptyString(env.OPENCLAW_DEPLOYMENT_PROFILE, defaultDeploymentProfile(env.OPENCLAW_HOST_PLATFORM));
-  const verificationCommands = parseStringArrayEnv(env.OPENCLAW_VERIFICATION_COMMANDS, []);
+  const toolingProfiles = parseToolingProfilesEnv(env.OPENCLAW_TOOLING_PROFILES);
+  const stack = env.OPENCLAW_STACK ? parseStackEnv(env.OPENCLAW_STACK) : createEmptyStack();
 
   const agent = {
     id: nonEmptyString(env.OPENCLAW_AGENT_ID, "workspace"),
-    name: nonEmptyString(env.OPENCLAW_AGENT_NAME, defaultAgentName(projectName)),
+    name: nonEmptyString(env.OPENCLAW_AGENT_NAME, defaultAgentName(projectName, repoIdentityPath)),
     defaultModel: nonEmptyString(env.OPENCLAW_AGENT_DEFAULT_MODEL, ""),
+    installScripts: parseStringArrayEnv(env.OPENCLAW_AGENT_INSTALL_SCRIPTS, []),
     verboseDefault: nonEmptyString(env.OPENCLAW_AGENT_VERBOSE_DEFAULT, "on"),
     thinkingDefault: nonEmptyString(env.OPENCLAW_AGENT_THINKING_DEFAULT, "adaptive"),
     blockStreamingDefault: nonEmptyString(env.OPENCLAW_AGENT_BLOCK_STREAMING_DEFAULT, "off"),
@@ -634,10 +790,7 @@ export function buildManifestFromEnv(env = process.env) {
     inboundDebounceMs: resolveInteger(env.OPENCLAW_INBOUND_DEBOUNCE_MS, 150),
   };
 
-  const threadBindingsSpawnAcp = resolveBoolean(
-    env.OPENCLAW_TELEGRAM_THREAD_BINDINGS_SPAWN_ACP ?? env.OPENCLAW_TOPIC_ACP,
-    false,
-  );
+  const threadBindingsSpawnAcp = resolveBoolean(env.OPENCLAW_TELEGRAM_THREAD_BINDINGS_SPAWN_ACP, false);
   const telegram = {
     enabled: resolveBoolean(env.OPENCLAW_TELEGRAM_ENABLED, true),
     dmPolicy: nonEmptyString(env.OPENCLAW_TELEGRAM_DM_POLICY, "pairing"),
@@ -646,10 +799,7 @@ export function buildManifestFromEnv(env = process.env) {
     blockStreaming: resolveBoolean(env.OPENCLAW_TELEGRAM_BLOCK_STREAMING, false),
     replyToMode: nonEmptyString(env.OPENCLAW_TELEGRAM_REPLY_TO_MODE, "all"),
     reactionLevel: nonEmptyString(env.OPENCLAW_TELEGRAM_REACTION_LEVEL, "minimal"),
-    proxy: nonEmptyString(env.OPENCLAW_TELEGRAM_PROXY, ""),
     configWrites: resolveBoolean(env.OPENCLAW_TELEGRAM_CONFIG_WRITES, false),
-    allowFrom: normalizePrincipalArray(parseStringArrayEnv(env.OPENCLAW_TELEGRAM_ALLOW_FROM, [])),
-    groupAllowFrom: normalizePrincipalArray(parseStringArrayEnv(env.OPENCLAW_TELEGRAM_GROUP_ALLOW_FROM, [])),
     groups: { "*": { requireMention: true } },
     threadBindings: {
       spawnAcpSessions: threadBindingsSpawnAcp,
@@ -691,15 +841,18 @@ export function buildManifestFromEnv(env = process.env) {
   };
 
   return normalizeProjectManifest({
-    version: 1,
     projectName,
     repoPath,
     deploymentProfile,
-    toolingProfile,
+    toolingProfiles,
+    tooling: {
+      installScripts: parseStringArrayEnv(env.OPENCLAW_TOOLING_INSTALL_SCRIPTS, []),
+      allowUnsafeCommands: resolveBoolean(env.OPENCLAW_TOOLING_ALLOW_UNSAFE_COMMANDS, false)
+    },
+    stack,
     toolingInstallCommand: nonEmptyString(env.OPENCLAW_TOOLING_INSTALL_COMMAND, ""),
     runtimeProfile,
     queueProfile,
-    verificationCommands,
     agent,
     queue,
     telegram,

@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureDir, readJsonFile, writeJsonFileAtomic } from "../../runtime/shared.mjs";
-import { PRODUCT_NAME, PRODUCT_VERSION } from "./product-metadata.mjs";
+import { PRODUCT_NAME } from "./product-metadata.mjs";
 
-const INSTANCE_REGISTRY_VERSION = 1;
+const INSTANCE_REGISTRY_VERSION = 2;
 export const LEGACY_COMPOSE_PORT = 18789;
 const GATEWAY_PORT_RANGE_START = 20000;
 const GATEWAY_PORT_RANGE_END = 39999;
@@ -32,13 +32,6 @@ function sanitizeRepoSlug(value) {
   return (normalized || "openclaw").slice(0, MAX_REPO_SLUG_LENGTH);
 }
 
-function deriveLegacyComposeProjectName(repoRoot) {
-  const normalizedRoot = toPortablePath(repoRoot).replace(/\/+$/g, "");
-  const basename = path.posix.basename(normalizedRoot) || path.basename(path.resolve(repoRoot));
-  const slug = sanitizeRepoSlug(basename);
-  return /^[a-z0-9]/.test(slug) ? slug : `repo-${slug}`.slice(0, 63);
-}
-
 function resolveRepoIdentityPath(repoRoot) {
   const resolved = path.resolve(repoRoot);
   try {
@@ -61,10 +54,6 @@ export function deriveComposeProjectName(repoRootOrInstanceId) {
     ? deriveInstanceId(raw)
     : raw;
   return `openclaw-${instanceId}`.slice(0, 63);
-}
-
-export function deriveLocalRuntimeImage(instanceId, productVersion = PRODUCT_VERSION) {
-  return `openclaw-repo-agent-runtime:${productVersion}-${String(instanceId ?? "").trim()}`;
 }
 
 function hashInstanceValue(value) {
@@ -191,9 +180,7 @@ export function buildInstanceMetadata(repoRoot) {
     repoRoot: resolvedRepoRoot,
     repoSlug,
     instanceId,
-    composeProjectName: deriveComposeProjectName(instanceId),
-    legacyComposeProjectName: deriveLegacyComposeProjectName(repoRoot),
-    localRuntimeImage: deriveLocalRuntimeImage(instanceId)
+    composeProjectName: deriveComposeProjectName(instanceId)
   };
 }
 
@@ -207,7 +194,6 @@ export function buildRegistryEntry(context, localEnv = {}) {
     gatewayToken: String(localEnv.OPENCLAW_GATEWAY_TOKEN ?? ""),
     portManaged: shouldManageGatewayPort(localEnv),
     telegramTokenHash: fingerprintTelegramBotToken(localEnv.TELEGRAM_BOT_TOKEN),
-    localRuntimeImage: context.localRuntimeImage,
     lastSeenAt: new Date().toISOString()
   };
 }

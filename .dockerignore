@@ -1,0 +1,8 @@
+.git
+.github
+.idea
+.openclaw
+node_modules
+test
+*.log
+*.tmp

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -83,7 +84,35 @@ export function uniqueStrings(values) {
   return [...new Set(values.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
 }
 
-export function normalizeTelegramPrincipal(value) {
+function normalizeIdentityPath(value) {
+  const portable = String(value ?? "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!portable) return "";
+  if (/^[a-z]:\//i.test(portable)) return portable.toLowerCase();
+  return portable;
+}
+
+export function deriveProjectRootName(repoPath, fallback = "workspace") {
+  const normalizedRepoPath = String(repoPath ?? "").trim();
+  if (!normalizedRepoPath) return String(fallback ?? "").trim() || "workspace";
+  const normalized = normalizeIdentityPath(path.resolve(normalizedRepoPath));
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.at(-1) || String(fallback ?? "").trim() || "workspace";
+}
+
+function deriveStableProjectId(repoPath, fallback = "workspace") {
+  const normalizedRepoPath = String(repoPath ?? "").trim();
+  const seed = normalizedRepoPath
+    ? normalizeIdentityPath(path.resolve(normalizedRepoPath))
+    : String(fallback ?? "").trim();
+  return crypto.createHash("sha256").update(seed || "workspace").digest("hex").slice(0, 8);
+}
+
+export function deriveDefaultAgentName(projectName, repoPath) {
+  const resolvedProjectName = String(projectName ?? "").trim() || deriveProjectRootName(repoPath);
+  return `${resolvedProjectName}-${deriveStableProjectId(repoPath, resolvedProjectName)}`;
+}
+
+function normalizeTelegramPrincipal(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
   if (raw === "*" || /^tg:/i.test(raw) || /^telegram:/i.test(raw) || raw.startsWith("@")) return raw;
@@ -174,11 +203,13 @@ export async function copyFileIfNewer(sourcePath, targetPath) {
 
 async function runCommand(command, args, options = {}) {
   const { cwd, env, input, timeoutMs } = options;
+  const useWindowsShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(String(command ?? "").trim());
 
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       env,
+      shell: useWindowsShell,
       stdio: ["pipe", "pipe", "pipe"],
     });
 

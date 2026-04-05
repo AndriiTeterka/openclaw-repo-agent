@@ -1,0 +1,27 @@
+{
+  "projectName": "custom-example",
+  "deploymentProfile": "docker-local",
+  "toolingProfiles": [],
+  "stack": {
+    "languages": [],
+    "tools": []
+  },
+  "runtimeProfile": "stable-chat",
+  "queueProfile": "stable-chat",
+  "agent": {
+    "id": "workspace",
+    "name": "Custom Example Workspace"
+  },
+  "telegram": {
+    "dmPolicy": "pairing",
+    "groupPolicy": "disabled",
+    "streamMode": "partial",
+    "replyToMode": "all"
+  },
+  "acp": {
+    "defaultAgent": "codex"
+  },
+  "security": {
+    "authBootstrapMode": "external"
+  }
+}

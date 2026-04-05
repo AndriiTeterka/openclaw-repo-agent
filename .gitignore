@@ -5,3 +5,8 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+.openclaw/
+!test/fixtures/custom/.openclaw/
+test/fixtures/custom/.openclaw/state/
+!test/fixtures/custom/.openclaw/config.json
+!test/fixtures/custom/.openclaw/instructions.md

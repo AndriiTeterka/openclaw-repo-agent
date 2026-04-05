@@ -26,7 +26,6 @@ const REPORT_TITLE_ALIASES = {
   "Up complete": "'up' completed",
   "Down complete": "'down' completed",
   "Update complete": "'update' completed",
-  "Verification complete": "'verify' completed",
   "Pairing complete": "'pair' completed",
   "Pairing settings updated": "'pair' updated"
 };

@@ -5,26 +5,29 @@ on:
     paths:
       - ".github/**"
       - "cli/**"
+      - "knip.json"
       - "package.json"
       - "package-lock.json"
       - "runtime/**"
-      - "schemas/**"
       - "test/**"
       - "README.md"
   pull_request:
     paths:
       - ".github/**"
       - "cli/**"
+      - "knip.json"
       - "package.json"
       - "package-lock.json"
       - "runtime/**"
-      - "schemas/**"
       - "test/**"
       - "README.md"
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["20", "22"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,12 +35,64 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Validate example and package contents
         run: npm test
 
-      - name: Validate example through reusable action
-        uses: ./.github/actions/validate-plugin
-        with:
-          repo-root: ./test/fixtures/custom
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build runtime-core smoke image
+        run: docker build --file runtime/Dockerfile.core --tag openclaw-repo-agent-runtime-core:validate .
+
+      - name: Create tooling smoke context
+        run: |
+          mkdir -p .tmp/tooling-smoke/scripts
+          cp runtime/Dockerfile.tooling .tmp/tooling-smoke/Dockerfile.tooling
+          cat > .tmp/tooling-smoke/tooling.manifest.json <<'EOF'
+          {
+            "schemaVersion": 1,
+            "runtimeDigest": "sha256:validate",
+            "platform": "linux/amd64",
+            "profiles": ["node22", "python3"],
+            "toolingScripts": [],
+            "agentScripts": [],
+            "unsafe": {
+              "enabled": false,
+              "toolingCommand": "",
+              "agentCommand": ""
+            }
+          }
+          EOF
+          cat > .tmp/tooling-smoke/.dockerignore <<'EOF'
+          *
+          !Dockerfile.tooling
+          !tooling.manifest.json
+          !scripts/
+          EOF
+
+      - name: Build tooling smoke image
+        run: |
+          docker build \
+            --file .tmp/tooling-smoke/Dockerfile.tooling \
+            --tag openclaw-repo-agent-tooling:validate \
+            --build-arg OPENCLAW_RUNTIME_CORE_IMAGE=openclaw-repo-agent-runtime-core:validate \
+            .tmp/tooling-smoke
+
+      - name: Run runtime-core smoke checks
+        run: |
+          docker run --rm --entrypoint sh openclaw-repo-agent-runtime-core:validate -lc "node --version && gh --version && playwright-cli --help >/dev/null"
+
+      - name: Run tooling smoke checks
+        run: |
+          docker run --rm --entrypoint sh openclaw-repo-agent-tooling:validate -lc "node --version && python3 --version"

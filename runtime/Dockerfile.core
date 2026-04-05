@@ -1,0 +1,68 @@
+FROM ghcr.io/openclaw/openclaw:latest
+
+USER root
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN mkdir -p /etc/apt/keyrings \
+ && apt-get update \
+ && apt-get install --yes --no-install-recommends ca-certificates curl \
+ && apt-get install --yes --no-install-recommends \
+    fd-find \
+    jq \
+    python3 \
+    ripgrep \
+    tree \
+    unzip \
+    xz-utils \
+    zip \
+ && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global @github/copilot @openai/codex @google/gemini-cli @playwright/cli acpx@0.3.1 \
+ && "$(npm root -g)/@playwright/cli/node_modules/.bin/playwright" install --with-deps chromium \
+ && npm cache clean --force
+
+RUN mkdir -p /app/extensions/acpx/node_modules /home/node/.openclaw /ms-playwright \
+ && chown -R node:node /app/extensions/acpx /home/node /ms-playwright
+
+# Preserve npm's real Playwright CLI symlink before installing the repo wrapper at the public path.
+RUN mv /usr/local/bin/playwright-cli /usr/local/bin/playwright-cli-real
+COPY runtime/playwright-cli-wrapper.mjs /usr/local/bin/playwright-cli
+COPY runtime/adapters /opt/openclaw/adapters
+COPY runtime/observability.mjs /opt/openclaw/observability.mjs
+COPY runtime/shared.mjs /opt/openclaw/shared.mjs
+COPY runtime/copilot-auth-token.mjs /opt/openclaw/copilot-auth-token.mjs
+COPY runtime/copilot-runtime-auth.mjs /opt/openclaw/copilot-runtime-auth.mjs
+COPY runtime/copilot-installation.mjs /opt/openclaw/copilot-installation.mjs
+COPY runtime/copilot-sdk-provider.mjs /opt/openclaw/copilot-sdk-provider.mjs
+COPY runtime/provider-registry.mjs /opt/openclaw/provider-registry.mjs
+COPY runtime/model-catalog.mjs /opt/openclaw/model-catalog.mjs
+COPY runtime/copilot-model-discovery.mjs /opt/openclaw/copilot-model-discovery.mjs
+COPY runtime/live-models-provider-data.mjs /opt/openclaw/live-models-provider-data.mjs
+COPY runtime/tooling-stack.mjs /opt/openclaw/tooling-stack.mjs
+COPY runtime/workspace-guidance.mjs /opt/openclaw/workspace-guidance.mjs
+COPY runtime/supported-acp-agents.mjs /opt/openclaw/supported-acp-agents.mjs
+COPY runtime/manifest-contract.mjs /opt/openclaw/manifest-contract.mjs
+COPY runtime/bootstrap-auth.mjs /opt/openclaw/bootstrap-auth.mjs
+COPY runtime/apply-tooling-manifest.mjs /opt/openclaw/apply-tooling-manifest.mjs
+COPY runtime/doctor.mjs /opt/openclaw/doctor.mjs
+COPY runtime/render-openclaw-config.mjs /opt/openclaw/render-openclaw-config.mjs
+COPY runtime/extensions/workspace-openclaw /opt/openclaw/plugins/workspace-openclaw
+COPY runtime/openclaw-disable-plugin-auto-enable-patch.mjs /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs
+COPY runtime/openclaw-copilot-token-patch.mjs /opt/openclaw/openclaw-copilot-token-patch.mjs
+COPY runtime/openclaw-copilot-sdk-provider-patch.mjs /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs
+COPY runtime/openclaw-telegram-models-patch.mjs /opt/openclaw/openclaw-telegram-models-patch.mjs
+COPY runtime/entrypoint.mjs /opt/openclaw/entrypoint.mjs
+RUN node /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-copilot-token-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-telegram-models-patch.mjs /app/dist \
+ && sed -i 's/\r$//' /opt/openclaw/entrypoint.mjs /usr/local/bin/playwright-cli /opt/openclaw/observability.mjs /opt/openclaw/copilot-auth-token.mjs /opt/openclaw/copilot-runtime-auth.mjs /opt/openclaw/copilot-installation.mjs /opt/openclaw/copilot-sdk-provider.mjs /opt/openclaw/copilot-model-discovery.mjs /opt/openclaw/live-models-provider-data.mjs /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs /opt/openclaw/openclaw-copilot-token-patch.mjs /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs /opt/openclaw/openclaw-telegram-models-patch.mjs \
+ && chmod 755 /usr/local/bin/playwright-cli \
+ && chown -R node:node /home/node /opt/openclaw /usr/local/bin/playwright-cli
+
+USER node
+
+ENTRYPOINT ["node", "/opt/openclaw/entrypoint.mjs"]
+CMD ["node", "dist/index.js", "gateway"]

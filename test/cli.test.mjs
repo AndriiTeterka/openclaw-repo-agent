@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,47 +10,85 @@ import { promisify } from "node:util";
 
 import {
   ACP_AGENT_CHOICES,
+  buildDashboardUrl,
+  buildRuntimeCoreBuildArgs,
+  buildRuntimeCoreOverlayBuildArgs,
   classifyTelegramBotProbeResult,
   collectInitPromptState,
   CODEX_AUTH_SOURCE_CHOICES,
-  defaultCodexAuthSource,
+  COPILOT_AUTH_SOURCE_CHOICES,
+  buildComposeBuildArgs,
+  buildComposeUpArgs,
+  buildCopilotCredentialTargets,
   describeCommandFromArgv,
   ensureGitExcludeEntries,
+  GEMINI_AUTH_SOURCE_CHOICES,
   hasIgnoreEntry,
+  inferImplicitAllowedAgents,
   looksLikeTelegramBotToken,
+  normalizePluginConfig,
   promptChoice,
+  resolveRuntimeCommandEnv,
   resolveGitInfoExcludePath,
   selectLatestPendingDeviceRequest,
-  selectLatestPendingPairingRequest
+  selectLatestPendingPairingRequest,
+  shouldRetryComposeUpFailure,
+  shouldAutoHealGatewayPortConflict
 } from "../cli/src/cli.mjs";
-import { deriveComposeProjectName } from "../cli/src/instance-registry.mjs";
+import { resolveInitProviderAvailability } from "../cli/src/commands/init.mjs";
+import { probeTelegramBotToken } from "../cli/src/commands/up.mjs";
+import { buildInstanceMetadata, deriveComposeProjectName } from "../cli/src/instance-registry.mjs";
 import { PRODUCT_VERSION } from "../cli/src/product-metadata.mjs";
+import { resolveAgentPaths } from "../cli/src/state-layout.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(".");
 const cliPath = path.resolve("cli/bin/openclaw-repo-agent.mjs");
+const modelDiscoveryEnv = {
+  OPENCLAW_MODEL_DISCOVERY_CODEX_BINARY: path.resolve("test/fixtures/model-discovery/codex-binary.txt"),
+  OPENCLAW_MODEL_DISCOVERY_GEMINI_MODELS_JS: path.resolve("test/fixtures/model-discovery/gemini-models.fixture.js")
+};
+
+function createStateHomeEnv(tempRoot) {
+  return {
+    OPENCLAW_REPO_AGENT_STATE_HOME: path.join(tempRoot, "state"),
+    OPENCLAW_REPO_AGENT_MOUNT_HOME: path.join(tempRoot, "mounts")
+  };
+}
+
+async function writeMachineLocalSecrets(repoPath, stateHomeEnv, contents) {
+  const instance = buildInstanceMetadata(repoPath);
+  const paths = resolveAgentPaths(repoPath, instance.instanceId, stateHomeEnv);
+  await fs.mkdir(path.dirname(paths.secretsEnvFile), { recursive: true });
+  await fs.writeFile(paths.secretsEnvFile, contents);
+  return paths;
+}
 
 function createPromptTestContext(tempRoot = repoRoot) {
   return {
     repoRoot: tempRoot,
     detection: {
       projectName: "demo-workspace",
-      toolingProfile: "none",
-      verificationCommands: []
+      toolingProfiles: [],
+      stack: {
+        languages: [],
+        tools: []
+      }
     }
   };
 }
 
 function createPromptTestPlugin() {
   return {
-    version: 1,
-    profile: "custom",
     projectName: "demo-workspace",
     deploymentProfile: "docker-local",
-    toolingProfile: "none",
+    toolingProfiles: [],
+    stack: {
+      languages: [],
+      tools: []
+    },
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    verificationCommands: [],
     agent: {
       id: "workspace",
       name: "Demo Workspace"
@@ -105,21 +145,186 @@ test("version flag prints product version", async () => {
 test("ACP init choices include the supported built-in agents", () => {
   assert.deepEqual(
     ACP_AGENT_CHOICES.map((choice) => choice.value),
-    ["codex", "claude", "gemini"]
+    ["codex", "gemini", "copilot"]
   );
 });
 
-test("Codex auth-source choices remain folder-first with API key fallback", () => {
+test("Codex auth-source choices only expose subscription login", () => {
   assert.deepEqual(
-    CODEX_AUTH_SOURCE_CHOICES.map((choice) => choice.value),
-    ["auth-folder", "api-key"]
+    CODEX_AUTH_SOURCE_CHOICES,
+    [{ value: "auth-folder", label: "Use OpenAI subscription login" }]
   );
 });
 
-test("defaultCodexAuthSource prefers detected auth folders over API keys", () => {
-  assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, "C:/Users/demo/.codex"), "auth-folder");
-  assert.equal(defaultCodexAuthSource({ OPENAI_API_KEY: "sk-test" }, {}, ""), "api-key");
-  assert.equal(defaultCodexAuthSource({}, {}, ""), "auth-folder");
+test("Gemini auth-source choices only expose subscription login", () => {
+  assert.deepEqual(
+    GEMINI_AUTH_SOURCE_CHOICES,
+    [
+      { value: "auth-folder", label: "Use Gemini subscription login" }
+    ]
+  );
+});
+
+test("Copilot auth-source choices only expose subscription login", () => {
+  assert.deepEqual(
+    COPILOT_AUTH_SOURCE_CHOICES,
+    [
+      { value: "auth-folder", label: "Use GitHub Copilot subscription login" }
+    ]
+  );
+});
+
+test("buildCopilotCredentialTargets includes both bare and LegacyGeneric credential manager targets", () => {
+  const targets = buildCopilotCredentialTargets({
+    logged_in_users: [
+      {
+        host: "https://github.com",
+        login: "andrii-teterka13"
+      }
+    ]
+  });
+
+  assert.ok(targets.includes("copilot-cli/https://github.com:andrii-teterka13"));
+  assert.ok(targets.includes("LegacyGeneric:target=copilot-cli/https://github.com:andrii-teterka13"));
+  assert.ok(targets.includes("copilot-cli/github.com:andrii-teterka13"));
+  assert.ok(targets.includes("LegacyGeneric:target=copilot-cli/github.com:andrii-teterka13"));
+});
+
+test("resolveRuntimeCommandEnv prefers explicit Copilot env tokens over host lookup", async () => {
+  let resolverCalls = 0;
+  const result = await resolveRuntimeCommandEnv(
+    { COPILOT_GITHUB_TOKEN: "ghu_explicit_token_1234567890" },
+    {},
+    {
+      baseEnv: {},
+      async resolveCopilotToken() {
+        resolverCalls += 1;
+        return "ghu_host_token_should_not_be_used_1234567890";
+      }
+    }
+  );
+
+  assert.equal(resolverCalls, 0);
+  assert.deepEqual(result, {
+    COPILOT_GITHUB_TOKEN: "ghu_explicit_token_1234567890"
+  });
+});
+
+test("resolveRuntimeCommandEnv bridges a host Copilot login into docker compose env", async () => {
+  const result = await resolveRuntimeCommandEnv(
+    {},
+    { copilot: "C:/Users/demo/.copilot" },
+    {
+      baseEnv: {},
+      async resolveCopilotToken(localEnv, detectedAuthPaths) {
+        assert.deepEqual(localEnv, {});
+        assert.deepEqual(detectedAuthPaths, { copilot: "C:/Users/demo/.copilot" });
+        return "ghu_host_token_1234567890";
+      }
+    }
+  );
+
+  assert.deepEqual(result, {
+    COPILOT_GITHUB_TOKEN: "ghu_host_token_1234567890"
+  });
+});
+
+test("inferImplicitAllowedAgents expands implicit provider list from detected auth folders", () => {
+  const allowedAgents = inferImplicitAllowedAgents(
+    "codex",
+    {},
+    {
+      gemini: "C:/Users/demo/.gemini",
+      copilot: "C:/Users/demo/.copilot"
+    },
+    "codex"
+  );
+
+  assert.deepEqual(allowedAgents, ["codex", "gemini", "copilot"]);
+});
+
+test("resolveInitProviderAvailability summarizes loaded and unavailable providers", () => {
+  const availability = resolveInitProviderAvailability("codex", ["codex", "gemini", "copilot"], {
+    codex: "C:/Users/demo/.codex",
+    copilot: "C:/Users/demo/.copilot"
+  });
+
+  assert.deepEqual(availability.loadedProviders.map((entry) => entry.agentId), ["codex", "copilot"]);
+  assert.deepEqual(availability.unavailableProviders.map((entry) => entry.agentId), ["gemini"]);
+  assert.equal(availability.selectedProviderLoaded, true);
+  assert.deepEqual(availability.summaryItems, [
+    "Loaded: Codex, Copilot",
+    "Unavailable: Gemini"
+  ]);
+});
+
+test("buildComposeBuildArgs builds the local tooling layer only", () => {
+  assert.deepEqual(buildComposeBuildArgs(), ["build", "openclaw-gateway"]);
+});
+
+test("buildRuntimeCoreBuildArgs builds the shared runtime-core image locally with fresh upstream layers", () => {
+  assert.deepEqual(
+    buildRuntimeCoreBuildArgs("ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest"),
+    [
+      "build",
+      "--pull",
+      "--file",
+      "runtime/Dockerfile.core",
+      "--tag",
+      "ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest",
+      "."
+    ]
+  );
+});
+
+test("buildRuntimeCoreOverlayBuildArgs layers local runtime files onto the selected runtime-core image", () => {
+  assert.deepEqual(
+    buildRuntimeCoreOverlayBuildArgs(
+      "ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest",
+      "openclaw-repo-agent-runtime-core-fallback:v1-test"
+    ),
+    [
+      "build",
+      "--file",
+      "runtime/Dockerfile.core.overlay",
+      "--tag",
+      "openclaw-repo-agent-runtime-core-fallback:v1-test",
+      "--build-arg",
+      "OPENCLAW_RUNTIME_CORE_BASE_IMAGE=ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest",
+      "."
+    ]
+  );
+});
+
+test("buildComposeUpArgs avoids forced recreation by default", () => {
+  assert.deepEqual(buildComposeUpArgs(), ["up", "-d", "--wait", "--wait-timeout", "300"]);
+  assert.deepEqual(
+    buildComposeUpArgs({ forceRecreate: true }),
+    ["up", "-d", "--wait", "--wait-timeout", "300", "--force-recreate"]
+  );
+});
+
+test("shouldRetryComposeUpFailure recognizes transient compose startup races", () => {
+  assert.equal(
+    shouldRetryComposeUpFailure({ stderr: "Network openclaw-demo_default Creating\nContainer demo-openclaw-gateway-1 Recreate" }),
+    true
+  );
+  assert.equal(
+    shouldRetryComposeUpFailure({ stdout: "timed out waiting for the condition" }),
+    true
+  );
+  assert.equal(
+    shouldRetryComposeUpFailure({ stderr: "Auth bootstrap failed for: codex, gemini, copilot." }),
+    false
+  );
+});
+
+test("buildDashboardUrl includes the gateway token when present", () => {
+  assert.equal(
+    buildDashboardUrl("28553", "mmxca0bj72gl86nti4627medqs1tkr"),
+    "http://127.0.0.1:28553/#token=mmxca0bj72gl86nti4627medqs1tkr"
+  );
+  assert.equal(buildDashboardUrl("28553"), "http://127.0.0.1:28553/");
 });
 
 test("looksLikeTelegramBotToken accepts Telegram-style bot tokens", () => {
@@ -139,31 +344,64 @@ test("classifyTelegramBotProbeResult treats Telegram 404s as definitive token fa
   );
 });
 
+test("probeTelegramBotToken uses node:https without throwing a reference error", async (t) => {
+  const calls = [];
+  t.mock.method(https, "get", (url, options, callback) => {
+    calls.push({ url, options });
+    const request = new EventEmitter();
+    request.destroy = () => {};
+    queueMicrotask(() => {
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.setEncoding = () => {};
+      callback(response);
+      response.emit("data", JSON.stringify({ ok: true, result: { username: "demo_bot" } }));
+      response.emit("end");
+    });
+    return request;
+  });
+
+  assert.deepEqual(
+    await probeTelegramBotToken("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"),
+    {
+      statusCode: 200,
+      payload: { ok: true, result: { username: "demo_bot" } },
+      ok: true,
+      definitiveFailure: false,
+      detail: ""
+    }
+  );
+  assert.deepEqual(calls, [{
+    url: "https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi/getMe",
+    options: { timeout: 5000 }
+  }]);
+});
+
 test("describeCommandFromArgv keeps the command label while skipping global option values", () => {
   assert.equal(describeCommandFromArgv(["--repo-root", "C:\\demo", "config", "validate", "--product-root=."]), "config validate");
   assert.equal(describeCommandFromArgv(["up", "--json"]), "up");
   assert.equal(describeCommandFromArgv(["--version"]), "");
 });
 
-test("promptChoice accepts default and numeric input", async () => {
+test("promptChoice delegates to the custom selector", async () => {
   const calls = [];
   const prompter = {
     async select(message, choices, fallbackValue) {
       calls.push({ message, choices, fallbackValue });
-      return calls.length === 1 ? fallbackValue : "api-key";
+      return fallbackValue;
     }
   };
   const first = await promptChoice(prompter, "ACP default agent", ACP_AGENT_CHOICES, "codex");
   const second = await promptChoice(prompter, "codex auth source", CODEX_AUTH_SOURCE_CHOICES, "auth-folder");
 
   assert.equal(first, "codex");
-  assert.equal(second, "api-key");
+  assert.equal(second, "auth-folder");
   assert.equal(calls.length, 2);
   assert.equal(calls[0].message, "ACP default agent");
   assert.equal(calls[1].message, "codex auth source");
 });
 
-test("collectInitPromptState asks Telegram after Codex auth prompts", async () => {
+test("collectInitPromptState asks Telegram after ACP selection for Codex", async () => {
   const calls = [];
   const prompter = {
     async select(message, choices, fallbackValue) {
@@ -186,22 +424,21 @@ test("collectInitPromptState asks Telegram after Codex auth prompts", async () =
     createPromptTestPlugin(),
     {},
     {},
-    "C:/Users/demo/.codex"
+    { codex: "C:/Users/demo/.codex" }
   );
 
   assert.deepEqual(calls, [
     "select:ACP default agent:codex",
-    "select:codex auth source:auth-folder",
     "password:Telegram bot token"
   ]);
 });
 
-test("collectInitPromptState asks Telegram after ACP selection for non-codex agents", async () => {
+test("collectInitPromptState asks Telegram after ACP selection for Gemini", async () => {
   const calls = [];
   const prompter = {
-    async select(message, _choices, fallbackValue) {
+    async select(message, choices, fallbackValue) {
       calls.push(`select:${message}:${fallbackValue}`);
-      return "claude";
+      return fallbackValue;
     },
     async input(message) {
       calls.push(`input:${message}`);
@@ -214,9 +451,9 @@ test("collectInitPromptState asks Telegram after ACP selection for non-codex age
   };
 
   const plugin = createPromptTestPlugin();
-  plugin.acp.defaultAgent = "claude";
-  plugin.acp.allowedAgents = ["claude"];
-  plugin.security.authBootstrapMode = "external";
+  plugin.acp.defaultAgent = "gemini";
+  plugin.acp.allowedAgents = ["gemini"];
+  plugin.security.authBootstrapMode = "gemini";
 
   await collectInitPromptState(
     prompter,
@@ -224,13 +461,203 @@ test("collectInitPromptState asks Telegram after ACP selection for non-codex age
     plugin,
     {},
     {},
-    ""
+    { gemini: "C:/Users/demo/.gemini" }
   );
 
   assert.deepEqual(calls, [
-    "select:ACP default agent:claude",
+    "select:ACP default agent:gemini",
     "password:Telegram bot token"
   ]);
+});
+
+test("collectInitPromptState asks Telegram after ACP selection for Copilot", async () => {
+  const calls = [];
+  const prompter = {
+    async select(message, choices, fallbackValue) {
+      calls.push(`select:${message}:${fallbackValue}`);
+      return fallbackValue;
+    },
+    async input(message) {
+      calls.push(`input:${message}`);
+      return "";
+    },
+    async password(message) {
+      calls.push(`password:${message}`);
+      return "123:telegram-token";
+    }
+  };
+
+  const plugin = createPromptTestPlugin();
+  plugin.acp.defaultAgent = "copilot";
+  plugin.acp.allowedAgents = ["copilot"];
+  plugin.security.authBootstrapMode = "copilot";
+
+  await collectInitPromptState(
+    prompter,
+    createPromptTestContext(),
+    plugin,
+    {},
+    {},
+    { copilot: "C:/Users/demo/.copilot" }
+  );
+
+  assert.deepEqual(calls, [
+    "select:ACP default agent:copilot",
+    "password:Telegram bot token"
+  ]);
+});
+
+test("collectInitPromptState preserves detected auth folders and selected auth sources", async () => {
+  const prompter = {
+    async select(_message, _choices, fallbackValue) {
+      return fallbackValue;
+    },
+    async input() {
+      return "";
+    },
+    async password() {
+      return "123:telegram-token";
+    }
+  };
+
+  const result = await collectInitPromptState(
+    prompter,
+    createPromptTestContext(),
+    createPromptTestPlugin(),
+    {},
+    {},
+    { codex: "C:/Users/demo/.codex", gemini: "C:/Users/demo/.gemini", copilot: "C:/Users/demo/.copilot" }
+  );
+
+  assert.equal(result.localEnv.OPENCLAW_CODEX_AUTH_SOURCE, "auth-folder");
+  assert.equal(result.localEnv.OPENCLAW_GEMINI_AUTH_SOURCE, "auth-folder");
+  assert.equal(result.localEnv.OPENCLAW_COPILOT_AUTH_SOURCE, "auth-folder");
+});
+
+test("collectInitPromptState asks Telegram after ACP selection for non-codex agents", async () => {
+  const calls = [];
+  const prompter = {
+    async select(message, _choices, fallbackValue) {
+      calls.push(`select:${message}:${fallbackValue}`);
+      return "gemini";
+    },
+    async input(message) {
+      calls.push(`input:${message}`);
+      return "";
+    },
+    async password(message) {
+      calls.push(`password:${message}`);
+      return "123:telegram-token";
+    }
+  };
+
+  const plugin = createPromptTestPlugin();
+  plugin.acp.defaultAgent = "gemini";
+  plugin.acp.allowedAgents = ["gemini"];
+  plugin.security.authBootstrapMode = "gemini";
+
+  await collectInitPromptState(
+    prompter,
+    createPromptTestContext(),
+    plugin,
+    {},
+    {},
+    { gemini: "C:/Users/demo/.gemini" }
+  );
+
+  assert.deepEqual(calls, [
+    "select:ACP default agent:gemini",
+    "password:Telegram bot token"
+  ]);
+});
+
+test("collectInitPromptState fails when no provider auth is detected", async () => {
+  await assert.rejects(
+    collectInitPromptState(
+      {
+        async select() {
+          return "codex";
+        },
+        async input() {
+          return "";
+        },
+        async password() {
+          return "123:telegram-token";
+        }
+      },
+      createPromptTestContext(),
+      createPromptTestPlugin(),
+      {},
+      {},
+      {}
+    ),
+    /No provider subscription login was detected/i
+  );
+});
+
+test("shouldAutoHealGatewayPortConflict heals stale legacy and managed registry reservations only", () => {
+  assert.equal(
+    shouldAutoHealGatewayPortConflict(
+      { OPENCLAW_GATEWAY_PORT: "18789", OPENCLAW_PORT_MANAGED: "false" },
+      {
+        duplicateAssignment: { instanceId: "stale-repo" },
+        registryOnlyConflict: true
+      }
+    ),
+    true
+  );
+
+  assert.equal(
+    shouldAutoHealGatewayPortConflict(
+      { OPENCLAW_GATEWAY_PORT: "24567", OPENCLAW_PORT_MANAGED: "true" },
+      {
+        duplicateAssignment: { instanceId: "stale-repo" },
+        registryOnlyConflict: true
+      }
+    ),
+    true
+  );
+
+  assert.equal(
+    shouldAutoHealGatewayPortConflict(
+      { OPENCLAW_GATEWAY_PORT: "24567", OPENCLAW_PORT_MANAGED: "false" },
+      {
+        duplicateAssignment: { instanceId: "stale-repo" },
+        registryOnlyConflict: true
+      }
+    ),
+    false
+  );
+
+  assert.equal(
+    shouldAutoHealGatewayPortConflict(
+      { OPENCLAW_GATEWAY_PORT: "18789", OPENCLAW_PORT_MANAGED: "false" },
+      {
+        duplicateAssignment: { instanceId: "live-repo" },
+        registryOnlyConflict: false
+      }
+    ),
+    false
+  );
+});
+
+test("normalizePluginConfig defaults projectName from the repo root and keeps derived tooling profiles and stack", () => {
+  const plugin = normalizePluginConfig({}, "C:/repo", {
+    projectName: "detected-repo",
+    toolingProfiles: ["node22"],
+    stack: {
+      languages: ["typescript"],
+      tools: ["pnpm"]
+    }
+  });
+
+  assert.equal(plugin.projectName, "repo");
+  assert.match(plugin.agent.name, /^repo-[a-f0-9]{8}$/);
+  assert.deepEqual(plugin.toolingProfiles, ["node22"]);
+  assert.deepEqual(plugin.stack, {
+    languages: ["typescript"],
+    tools: ["pnpm"]
+  });
 });
 
 test("inline option syntax works for config validation", async () => {
@@ -248,6 +675,104 @@ test("inline option syntax works for config validation", async () => {
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
   assert.equal(payload.productVersion, PRODUCT_VERSION);
+});
+
+test("config validation auto-detects additional allowed agents from detected provider auth", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-auto-agents-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  const copilotHome = path.join(tempRoot, ".copilot");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.mkdir(copilotHome, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
+    ...createPromptTestPlugin(),
+    acp: {
+      defaultAgent: "codex",
+      allowedAgents: ["codex"]
+    }
+  }, null, 2));
+  await fs.writeFile(path.join(copilotHome, "config.json"), JSON.stringify({ logged_in_users: [] }));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "config",
+    "validate",
+    "--repo-root",
+    repoPath,
+    "--product-root",
+    ".",
+    "--json"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: tempRoot,
+      USERPROFILE: tempRoot,
+      CODEX_HOME: path.join(tempRoot, ".codex-missing"),
+      GEMINI_CLI_HOME: path.join(tempRoot, ".gemini-missing"),
+      COPILOT_HOME: copilotHome
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.manifest.acp.allowedAgents, ["codex", "copilot"]);
+});
+
+test("config validation does not materialize repo-local command event logs", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-no-events-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify(createPromptTestPlugin(), null, 2));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "config",
+    "validate",
+    "--repo-root",
+    repoPath,
+    "--product-root=.",
+    "--json"
+  ], {
+    cwd: repoRoot
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  const runtimeEntries = await fs.readdir(path.join(openclawPath, "runtime")).catch(() => []);
+  assert.deepEqual(runtimeEntries, []);
+});
+
+test("config validation rejects deprecated Telegram keys", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-deprecated-telegram-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
+    ...createPromptTestPlugin(),
+    telegram: {
+      ...createPromptTestPlugin().telegram,
+      proxy: "http://127.0.0.1:8080"
+    }
+  }, null, 2));
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      cliPath,
+      "config",
+      "validate",
+      "--repo-root",
+      repoPath,
+      "--product-root=."
+    ], {
+      cwd: repoRoot
+    }),
+    (error) => {
+      assert.match(error.stderr, /Deprecated telegram keys in config\.json: telegram\.proxy/i);
+      return true;
+    }
+  );
 });
 
 test("config validation rejects unsupported ACP agents from plugin config", async () => {
@@ -336,6 +861,56 @@ test("fatal command failures reuse the success-style heading with the command na
   );
 });
 
+test("removed migration commands are rejected", async () => {
+  for (const argv of [
+    [cliPath, "migrate-state"],
+    [cliPath, "cleanup-state"],
+    [cliPath, "config", "migrate"]
+  ]) {
+    await assert.rejects(
+      execFileAsync(process.execPath, argv, { cwd: repoRoot }),
+      (error) => {
+        assert.match(error.stderr, /Unknown command:/i);
+        return true;
+      }
+    );
+  }
+});
+
+test("removed hidden pair flags are rejected", async () => {
+  for (const argv of [
+    [cliPath, "pair", "--allow-user", "123"],
+    [cliPath, "pair", "--group-allow-user", "456"],
+    [cliPath, "pair", "--switch-dm-policy", "approved"],
+    [cliPath, "pair", "--switch-group-policy", "approved"],
+    [cliPath, "pair", "--telegram-proxy", "http://127.0.0.1:8080"]
+  ]) {
+    await assert.rejects(
+      execFileAsync(process.execPath, argv, { cwd: repoRoot }),
+      (error) => {
+        assert.match(error.stderr, /Unknown option:/i);
+        return true;
+      }
+    );
+  }
+});
+
+test("removed API-key flags are rejected", async () => {
+  for (const argv of [
+    [cliPath, "up", "--openai-api-key", "sk-test"],
+    [cliPath, "up", "--gemini-api-key", "gem-test"],
+    [cliPath, "up", "--github-token", "ghp-test"]
+  ]) {
+    await assert.rejects(
+      execFileAsync(process.execPath, argv, { cwd: repoRoot }),
+      (error) => {
+        assert.match(error.stderr, /Unknown option:/i);
+        return true;
+      }
+    );
+  }
+});
+
 test("deriveComposeProjectName uses the repo identity and prefix", () => {
   assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\appium-test-project"), /^openclaw-appium-test-project-[a-f0-9]{8}$/);
   assert.match(deriveComposeProjectName("C:\\Users\\ateterka\\Repo With Spaces"), /^openclaw-repo-with-spaces-[a-f0-9]{8}$/);
@@ -364,9 +939,10 @@ test("selectLatestPendingDeviceRequest returns the newest pending device request
   assert.equal(selected?.requestId, "newest");
 });
 
-test("example consumer repo does not commit generated .openclaw/state files", async () => {
-  const stateDir = path.join(repoRoot, "test", "fixtures", "custom", ".openclaw", "state");
-  const entries = await fs.readdir(stateDir).catch(() => []);
+test("example consumer repo does not commit generated runtime files beyond the transient event log", async () => {
+  const runtimeDir = path.join(repoRoot, "test", "fixtures", "custom", ".openclaw", "runtime");
+  const entries = (await fs.readdir(runtimeDir).catch(() => []))
+    .filter((entry) => entry !== "events.jsonl");
   assert.deepEqual(entries, []);
 });
 
@@ -411,7 +987,7 @@ test("instances list reads the machine-local registry", async () => {
   const registryDir = path.join(tempRoot, "openclaw-repo-agent");
   await fs.mkdir(registryDir, { recursive: true });
   await fs.writeFile(path.join(registryDir, "instances.json"), JSON.stringify({
-    version: 1,
+    version: 2,
     instances: {
       "repo-one-deadbeef": {
         instanceId: "repo-one-deadbeef",
@@ -421,7 +997,6 @@ test("instances list reads the machine-local registry", async () => {
         gatewayPort: "20001",
         portManaged: true,
         telegramTokenHash: "",
-        localRuntimeImage: `openclaw-repo-agent-runtime:${PRODUCT_VERSION}-repo-one-deadbeef`,
         lastSeenAt: "2026-03-12T00:00:00.000Z"
       }
     }
@@ -446,7 +1021,37 @@ test("instances list reads the machine-local registry", async () => {
   assert.equal(payload.instances[0].instanceId, "repo-one-deadbeef");
 });
 
-test("config validation upgrades legacy codex repos to codex defaults", async () => {
+test("paths --json only returns canonical paths", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-paths-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const stateHomeEnv = createStateHomeEnv(tempRoot);
+  await fs.mkdir(path.join(repoPath, ".openclaw"), { recursive: true });
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "paths",
+    "--repo-root",
+    repoPath,
+    "--product-root=.",
+    "--json=true"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...stateHomeEnv
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.repoRoot, repoPath);
+  assert.equal(payload.legacy, undefined);
+  assert.equal(payload.eventLogFile, path.join(repoPath, ".openclaw", "runtime", "events.jsonl"));
+  assert.ok(payload.secretsEnvFile);
+  assert.ok(payload.runtimeEnvFile);
+  assert.ok(payload.playwrightDir);
+});
+
+test("config validation preserves explicit external auth mode for codex workspaces", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-test-"));
   const repoPath = path.join(tempRoot, "repo");
   const openclawPath = path.join(repoPath, ".openclaw");
@@ -456,14 +1061,15 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
   await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
-    version: 1,
-    profile: "custom",
     projectName: "legacy-codex",
     deploymentProfile: "docker-local",
-    toolingProfile: "none",
+    toolingProfiles: [],
+    stack: {
+      languages: [],
+      tools: []
+    },
     runtimeProfile: "stable-chat",
     queueProfile: "stable-chat",
-    verificationCommands: [],
     agent: {
       id: "workspace",
       name: "Legacy Codex Workspace",
@@ -502,14 +1108,148 @@ test("config validation upgrades legacy codex repos to codex defaults", async ()
     cwd: repoRoot,
     env: {
       ...process.env,
+      ...modelDiscoveryEnv,
       CODEX_HOME: codexHome
     }
   });
 
   const payload = JSON.parse(stdout);
   assert.equal(payload.ok, true);
-  assert.equal(payload.plugin.agent.defaultModel, "openai-codex/gpt-5.4");
+  assert.equal(payload.plugin.agent.defaultModel, "");
   assert.equal(payload.plugin.security.authBootstrapMode, "external");
   assert.equal(payload.manifest.agent.defaultModel, "openai-codex/gpt-5.4");
-  assert.equal(payload.manifest.security.authBootstrapMode, "codex");
+  assert.equal(payload.manifest.security.authBootstrapMode, "external");
+});
+
+test("config validation defaults Gemini subscription workspaces to the latest Gemini model", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-gemini-subscription-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+  const geminiHome = path.join(tempRoot, ".gemini");
+
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.mkdir(geminiHome, { recursive: true });
+  await fs.writeFile(path.join(geminiHome, "oauth_creds.json"), JSON.stringify({ tokens: {} }));
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
+    projectName: "gemini-api",
+    deploymentProfile: "docker-local",
+    toolingProfiles: [],
+    stack: {
+      languages: [],
+      tools: []
+    },
+    runtimeProfile: "stable-chat",
+    queueProfile: "stable-chat",
+    agent: {
+      id: "workspace",
+      name: "Gemini Workspace",
+      maxConcurrent: 4,
+      skipBootstrap: true,
+      defaultModel: ""
+    },
+    telegram: {
+      dmPolicy: "pairing",
+      groupPolicy: "disabled",
+      streamMode: "partial",
+      replyToMode: "all",
+      threadBindings: {
+        spawnAcpSessions: false
+      }
+    },
+    acp: {
+      defaultAgent: "gemini",
+      allowedAgents: ["gemini"],
+      preferredMode: "oneshot"
+    },
+    security: {
+      authBootstrapMode: "gemini"
+    }
+  }, null, 2));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "config",
+    "validate",
+    "--repo-root",
+    repoPath,
+    "--product-root=.",
+    "--json=true"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...modelDiscoveryEnv,
+      GEMINI_CLI_HOME: geminiHome
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.plugin.agent.defaultModel, "");
+  assert.equal(payload.manifest.agent.defaultModel, "google-gemini-cli/gemini-3.1-pro-preview");
+  assert.equal(payload.manifest.security.authBootstrapMode, "gemini");
+});
+
+test("config validation heals stale built-in Codex defaults after switching the workspace to Gemini", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-gemini-stale-default-"));
+  const repoPath = path.join(tempRoot, "repo");
+  const openclawPath = path.join(repoPath, ".openclaw");
+
+  await fs.mkdir(openclawPath, { recursive: true });
+  await fs.writeFile(path.join(openclawPath, "config.json"), JSON.stringify({
+    projectName: "gemini-stale-default",
+    deploymentProfile: "docker-local",
+    toolingProfiles: [],
+    stack: {
+      languages: [],
+      tools: []
+    },
+    runtimeProfile: "stable-chat",
+    queueProfile: "stable-chat",
+    agent: {
+      id: "workspace",
+      name: "Gemini Workspace",
+      maxConcurrent: 4,
+      skipBootstrap: true,
+      defaultModel: "openai-codex/gpt-5.4"
+    },
+    telegram: {
+      dmPolicy: "pairing",
+      groupPolicy: "disabled",
+      streamMode: "partial",
+      replyToMode: "all",
+      threadBindings: {
+        spawnAcpSessions: false
+      }
+    },
+    acp: {
+      defaultAgent: "gemini",
+      allowedAgents: ["gemini"],
+      preferredMode: "oneshot"
+    },
+    security: {
+      authBootstrapMode: "gemini"
+    }
+  }, null, 2));
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "config",
+    "validate",
+    "--repo-root",
+    repoPath,
+    "--product-root=.",
+    "--json=true"
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...modelDiscoveryEnv
+    }
+  });
+
+  const payload = JSON.parse(stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.plugin.agent.defaultModel, "");
+  assert.equal(payload.manifest.agent.defaultModel, "google-gemini-cli/gemini-3.1-pro-preview");
 });

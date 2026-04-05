@@ -1,0 +1,64 @@
+ARG OPENCLAW_RUNTIME_CORE_IMAGE=ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest
+FROM ${OPENCLAW_RUNTIME_CORE_IMAGE}
+
+USER root
+
+RUN set -eux; \
+    missing_runtime_cli=0; \
+    command -v acpx >/dev/null 2>&1 || missing_runtime_cli=1; \
+    command -v codex >/dev/null 2>&1 || missing_runtime_cli=1; \
+    command -v copilot >/dev/null 2>&1 || missing_runtime_cli=1; \
+    command -v gemini >/dev/null 2>&1 || missing_runtime_cli=1; \
+    [ -x /usr/local/bin/playwright-cli-real ] || [ -x /usr/local/bin/playwright-cli ] || missing_runtime_cli=1; \
+    if [ "$missing_runtime_cli" = "1" ]; then \
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global @github/copilot @openai/codex @google/gemini-cli @playwright/cli acpx@0.3.1; \
+      npm cache clean --force; \
+    fi; \
+    if [ ! -x /usr/local/bin/playwright-cli-real ] && [ -x /usr/local/bin/playwright-cli ]; then \
+      mv /usr/local/bin/playwright-cli /usr/local/bin/playwright-cli-real; \
+    fi; \
+    mkdir -p /app/extensions/acpx/node_modules; \
+    chown -R node:node /app/extensions/acpx
+
+COPY runtime/playwright-cli-wrapper.mjs /usr/local/bin/playwright-cli
+COPY runtime/adapters /opt/openclaw/adapters
+COPY runtime/observability.mjs /opt/openclaw/observability.mjs
+COPY runtime/shared.mjs /opt/openclaw/shared.mjs
+COPY runtime/copilot-auth-token.mjs /opt/openclaw/copilot-auth-token.mjs
+COPY runtime/copilot-runtime-auth.mjs /opt/openclaw/copilot-runtime-auth.mjs
+COPY runtime/copilot-installation.mjs /opt/openclaw/copilot-installation.mjs
+COPY runtime/copilot-sdk-provider.mjs /opt/openclaw/copilot-sdk-provider.mjs
+COPY runtime/provider-registry.mjs /opt/openclaw/provider-registry.mjs
+COPY runtime/model-catalog.mjs /opt/openclaw/model-catalog.mjs
+COPY runtime/copilot-model-discovery.mjs /opt/openclaw/copilot-model-discovery.mjs
+COPY runtime/live-models-provider-data.mjs /opt/openclaw/live-models-provider-data.mjs
+COPY runtime/tooling-stack.mjs /opt/openclaw/tooling-stack.mjs
+COPY runtime/workspace-guidance.mjs /opt/openclaw/workspace-guidance.mjs
+COPY runtime/supported-acp-agents.mjs /opt/openclaw/supported-acp-agents.mjs
+COPY runtime/manifest-contract.mjs /opt/openclaw/manifest-contract.mjs
+COPY runtime/bootstrap-auth.mjs /opt/openclaw/bootstrap-auth.mjs
+COPY runtime/apply-tooling-manifest.mjs /opt/openclaw/apply-tooling-manifest.mjs
+COPY runtime/doctor.mjs /opt/openclaw/doctor.mjs
+COPY runtime/render-openclaw-config.mjs /opt/openclaw/render-openclaw-config.mjs
+COPY runtime/extensions/workspace-openclaw /opt/openclaw/plugins/workspace-openclaw
+COPY runtime/openclaw-disable-plugin-auto-enable-patch.mjs /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs
+COPY runtime/openclaw-copilot-token-patch.mjs /opt/openclaw/openclaw-copilot-token-patch.mjs
+COPY runtime/openclaw-copilot-sdk-provider-patch.mjs /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs
+COPY runtime/openclaw-telegram-models-patch.mjs /opt/openclaw/openclaw-telegram-models-patch.mjs
+COPY runtime/entrypoint.mjs /opt/openclaw/entrypoint.mjs
+COPY tooling.manifest.json /tmp/openclaw/tooling.manifest.json
+COPY scripts/ /tmp/openclaw/scripts/
+
+RUN node /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-copilot-token-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs /app/dist \
+ && node /opt/openclaw/openclaw-telegram-models-patch.mjs /app/dist \
+ && node /opt/openclaw/apply-tooling-manifest.mjs /tmp/openclaw/tooling.manifest.json /tmp/openclaw/scripts \
+ && sed -i 's/\r$//' /opt/openclaw/entrypoint.mjs /usr/local/bin/playwright-cli /opt/openclaw/observability.mjs /opt/openclaw/copilot-auth-token.mjs /opt/openclaw/copilot-runtime-auth.mjs /opt/openclaw/copilot-installation.mjs /opt/openclaw/copilot-sdk-provider.mjs /opt/openclaw/copilot-model-discovery.mjs /opt/openclaw/live-models-provider-data.mjs /opt/openclaw/openclaw-disable-plugin-auto-enable-patch.mjs /opt/openclaw/openclaw-copilot-token-patch.mjs /opt/openclaw/openclaw-copilot-sdk-provider-patch.mjs /opt/openclaw/openclaw-telegram-models-patch.mjs \
+ && chmod 755 /usr/local/bin/playwright-cli \
+ && chown -R node:node /app/extensions/acpx /home/node /opt/openclaw /usr/local/bin/playwright-cli
+
+USER node
+
+ENTRYPOINT ["node", "/opt/openclaw/entrypoint.mjs"]
+CMD ["node", "dist/index.js", "gateway"]

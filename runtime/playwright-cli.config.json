@@ -1,9 +1,0 @@
-{
-  "browser": {
-    "browserName": "chromium",
-    "launchOptions": {
-      "channel": "chromium"
-    }
-  },
-  "outputDir": ".openclaw/playwright/artifacts"
-}

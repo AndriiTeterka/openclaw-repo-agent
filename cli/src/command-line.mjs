@@ -1,9 +1,7 @@
 import { resolveBoolean } from "../../runtime/shared.mjs";
 
 const ARRAY_FLAGS = new Set([
-  "verification-command",
-  "allow-user",
-  "group-allow-user",
+  "tooling-profile",
   "acp-allowed-agent"
 ]);
 
@@ -12,8 +10,7 @@ const BOOLEAN_FLAGS = new Set([
   "non-interactive",
   "json",
   "fix",
-  "verify",
-  "topic-acp",
+  "refresh",
   "check-updates",
   "reassign-port",
   "force"
@@ -22,9 +19,7 @@ const BOOLEAN_FLAGS = new Set([
 const STRING_FLAGS = new Set([
   "repo-root",
   "product-root",
-  "profile",
   "project-name",
-  "tooling-profile",
   "runtime-profile",
   "queue-profile",
   "deployment-profile",
@@ -32,17 +27,12 @@ const STRING_FLAGS = new Set([
   "agent-default-model",
   "acp-default-agent",
   "approve",
-  "switch-dm-policy",
-  "switch-group-policy",
   "dm-policy",
   "group-policy",
   "reply-to-mode",
   "stream-mode",
-  "telegram-proxy",
   "auto-select-family",
   "telegram-bot-token",
-  "openai-api-key",
-  "target-auth-path",
   "gateway-url",
   "gateway-token",
   "gateway-password"
