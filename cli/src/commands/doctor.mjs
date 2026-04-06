@@ -157,6 +157,18 @@ export async function handleDoctor(context, options) {
     {
       envKey: "OPENCLAW_COPILOT_HOME_MOUNT_PATH",
       mountPattern: /\$\{OPENCLAW_COPILOT_HOME_MOUNT_PATH\}:\$\{COPILOT_HOME\}:ro/
+    },
+    {
+      envKey: "OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH",
+      mountPattern: /\$\{OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH\}:\/home\/node\/\.copilot\/session-state:rw/
+    },
+    {
+      envKey: "OPENCLAW_AGENTS_HOME_MOUNT_PATH",
+      mountPattern: /\$\{OPENCLAW_AGENTS_HOME_MOUNT_PATH\}:\/home\/node\/\.agents:ro/
+    },
+    {
+      envKey: "OPENCLAW_CLAUDE_HOME_MOUNT_PATH",
+      mountPattern: /\$\{OPENCLAW_CLAUDE_HOME_MOUNT_PATH\}:\/home\/node\/\.claude:ro/
     }
   ];
   const providerHomeMountsOk = providerHomeMountChecks.every(({ envKey, mountPattern }) => {
@@ -175,7 +187,7 @@ export async function handleDoctor(context, options) {
     "rendered-isolation",
     renderedIsolationOk,
     renderedIsolationOk
-      ? "Rendered compose file uses a read-only rootfs and only workspace plus selected provider home binds."
+      ? "Rendered compose file uses a read-only rootfs and only workspace plus selected provider/support home binds."
       : "Rendered compose file does not match the isolation contract.",
     renderedIsolationOk ? "" : "Run `openclaw-repo-agent update` and inspect the rendered compose file."
   );
@@ -185,13 +197,16 @@ export async function handleDoctor(context, options) {
     && /OPENCLAW_CODEX_HOME_MOUNT_PATH=/.test(runtimeEnvSource)
     && /OPENCLAW_GEMINI_CLI_HOME_MOUNT_PATH=/.test(runtimeEnvSource)
     && /OPENCLAW_COPILOT_HOME_MOUNT_PATH=/.test(runtimeEnvSource)
+    && /OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH=/.test(runtimeEnvSource)
+    && /OPENCLAW_AGENTS_HOME_MOUNT_PATH=/.test(runtimeEnvSource)
+    && /OPENCLAW_CLAUDE_HOME_MOUNT_PATH=/.test(runtimeEnvSource)
     && !/OPENCLAW_AUTH_MIRRORS_MOUNT_PATH=|TARGET_AUTH_PATH=|OPENCLAW_CODEX_AUTH_PATH=|OPENCLAW_GEMINI_AUTH_PATH=|OPENCLAW_COPILOT_AUTH_PATH=/.test(runtimeEnvSource);
   pushCheck(
     results,
     "runtime-env-contract",
     runtimeEnvContractOk,
     runtimeEnvContractOk
-      ? "Runtime env uses digest traceability and direct provider-home mounts."
+      ? "Runtime env uses digest traceability and direct provider/support-home mounts."
       : "Runtime env still exposes removed auth-mirror or auth-path variables.",
     runtimeEnvContractOk ? "" : "Re-render the runtime env and remove auth-path variables."
   );
@@ -314,7 +329,12 @@ export async function handleDoctor(context, options) {
       const mounts = Array.isArray(containerInfo?.Mounts) ? containerInfo.Mounts : [];
       const allowedBindSources = new Set([
         normalizePortablePath(context.repoRoot),
+        normalizePortablePath(context.paths.copilotSessionStateDir),
         ...Object.values(context.paths.providerHomes ?? {})
+          .map((homePath) => String(homePath ?? "").trim())
+          .filter(Boolean)
+          .map((homePath) => normalizePortablePath(homePath)),
+        ...Object.values(context.paths.copilotSupportHomes ?? {})
           .map((homePath) => String(homePath ?? "").trim())
           .filter(Boolean)
           .map((homePath) => normalizePortablePath(homePath))
@@ -333,7 +353,7 @@ export async function handleDoctor(context, options) {
           : `Running container isolation drift detected${disallowedBindMounts.length > 0 ? `: ${disallowedBindMounts.map((mount) => mount.Source).join(", ")}` : ""}.`,
         readonlyRootfs && disallowedBindMounts.length === 0
           ? ""
-          : "Restart the stack after regenerating the runtime files; only the workspace and selected provider home roots should be bind-mounted."
+          : "Restart the stack after regenerating the runtime files; only the workspace and selected provider/support home roots should be bind-mounted."
       );
     }
   }

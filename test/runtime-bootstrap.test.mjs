@@ -23,6 +23,9 @@ test("runtime entrypoint accepts either a local or bundled acpx plugin", async (
   assert.match(entrypoint, /process\.env\.OPENCLAW_ACPX_EXPECTED_VERSION = GLOBAL_ACPX_EXPECTED_VERSION/);
   assert.match(entrypoint, /await ensureDir\(BUNDLED_ACPX_NODE_MODULES_DIR\)/);
   assert.match(entrypoint, /await fs\.chmod\(RUNTIME_HOME, 0o700\)/);
+  assert.match(entrypoint, /function applyHostEnvPassthrough\(env = process\.env\)/);
+  assert.match(entrypoint, /process\.env\[normalizedName\] = value/);
+  assert.match(entrypoint, /applyHostEnvPassthrough\(process\.env\);/);
   assert.match(entrypoint, /watchGatewayTelegram/);
   assert.match(entrypoint, /function isHealthCommand\(argv\)/);
   assert.match(entrypoint, /if \(!isHealthCommand\(argv\)\) \{\s*await runBootstrap\(eventLogger\);\s*\}/);

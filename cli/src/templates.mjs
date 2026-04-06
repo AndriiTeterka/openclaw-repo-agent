@@ -31,15 +31,35 @@ function hasProviderHomeMount(providerHomeMounts = {}, agentId) {
   return Boolean(mount);
 }
 
+function hasMount(mounts = {}, mountId) {
+  const mount = mounts?.[mountId];
+  if (!mount) return false;
+  if (typeof mount === "object") return Boolean(mount.available);
+  return Boolean(mount);
+}
+
 export function renderComposeTemplate(options = {}) {
   const providerHomeVolumes = Object.entries(PROVIDER_HOME_LAYOUT)
     .filter(([agentId]) => hasProviderHomeMount(options.providerHomeMounts, agentId))
     .map(([, definition]) => `    - \${${definition.mountPathEnvKey}}:\${${definition.envKey}}:ro`);
+  const supportHomeVolumes = [
+    ["agents", "OPENCLAW_AGENTS_HOME_MOUNT_PATH", "/home/node/.agents"],
+    ["claude", "OPENCLAW_CLAUDE_HOME_MOUNT_PATH", "/home/node/.claude"]
+  ]
+    .filter(([homeId]) => hasMount(options.copilotSupportHomeMounts, homeId))
+    .map(([, mountPathEnvKey, runtimePath]) => `    - \${${mountPathEnvKey}}:${runtimePath}:ro`);
   const volumeLines = [
     "    - openclaw-home:/home/node",
+    "    - ${OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH}:/home/node/.copilot/session-state:rw",
     ...providerHomeVolumes,
+    ...supportHomeVolumes,
     "    - ${TARGET_REPO_PATH}:/workspace:rw"
   ].join("\n");
+  const hostEnvPassthroughLines = (Array.isArray(options.hostEnvPassthroughNames) ? options.hostEnvPassthroughNames : [])
+    .map((envName) => String(envName ?? "").trim())
+    .filter(Boolean)
+    .map((envName) => `    ${envName}: \${${envName}:-}`)
+    .join("\n");
   return `x-openclaw-common: &openclaw-common
   image: \${OPENCLAW_STACK_IMAGE}
   init: true
@@ -85,7 +105,8 @@ export function renderComposeTemplate(options = {}) {
     OPENCLAW_GEMINI_AUTH_SOURCE: \${OPENCLAW_GEMINI_AUTH_SOURCE}
     OPENCLAW_COPILOT_AUTH_SOURCE: \${OPENCLAW_COPILOT_AUTH_SOURCE}
     OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS: \${OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS}
-    OPENCLAW_AGENT_NAME: \${OPENCLAW_AGENT_NAME}
+    OPENCLAW_HOST_ENV_PASSTHROUGH_JSON: \${OPENCLAW_HOST_ENV_PASSTHROUGH_JSON}
+${hostEnvPassthroughLines ? `${hostEnvPassthroughLines}\n` : ""}    OPENCLAW_AGENT_NAME: \${OPENCLAW_AGENT_NAME}
     OPENCLAW_AGENT_DEFAULT_MODEL: \${OPENCLAW_AGENT_DEFAULT_MODEL}
     OPENCLAW_AGENT_VERBOSE_DEFAULT: \${OPENCLAW_AGENT_VERBOSE_DEFAULT}
     OPENCLAW_AGENT_THINKING_DEFAULT: \${OPENCLAW_AGENT_THINKING_DEFAULT}

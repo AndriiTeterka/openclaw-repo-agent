@@ -532,7 +532,7 @@ export function buildOpenClawConfig(manifest, env = process.env) {
   const acpStreamMaxChunkChars = resolveInteger(env.OPENCLAW_ACP_STREAM_MAX_CHARS, manifest.acp.stream.maxChunkChars);
 
   const acpxPermissionMode = nonEmptyString(env.OPENCLAW_ACPX_PERMISSION_MODE, "approve-all");
-  const acpxNonInteractivePermissions = nonEmptyString(env.OPENCLAW_ACPX_NON_INTERACTIVE_PERMISSIONS, "fail");
+  const acpxNonInteractivePermissions = nonEmptyString(env.OPENCLAW_ACPX_NON_INTERACTIVE_PERMISSIONS, "deny");
   const acpxCommand = nonEmptyString(env.OPENCLAW_ACPX_COMMAND, "");
   const acpxExpectedVersion = nonEmptyString(env.OPENCLAW_ACPX_EXPECTED_VERSION, "");
   const execTimeoutSec = resolveInteger(env.OPENCLAW_EXEC_TIMEOUT_SEC, manifest.tools.exec.timeoutSec);

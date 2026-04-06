@@ -31,6 +31,21 @@ export const PROVIDER_HOME_LAYOUT = Object.freeze({
   })
 });
 
+export const COPILOT_SUPPORT_HOME_LAYOUT = Object.freeze({
+  agents: Object.freeze({
+    envKey: "OPENCLAW_AGENTS_HOME",
+    mountPathEnvKey: "OPENCLAW_AGENTS_HOME_MOUNT_PATH",
+    defaultDirName: ".agents",
+    runtimePath: "/home/node/.agents"
+  }),
+  claude: Object.freeze({
+    envKey: "OPENCLAW_CLAUDE_HOME",
+    mountPathEnvKey: "OPENCLAW_CLAUDE_HOME_MOUNT_PATH",
+    defaultDirName: ".claude",
+    runtimePath: "/home/node/.claude"
+  })
+});
+
 function resolveStateRoot(env = process.env) {
   const overrideRoot = String(env.OPENCLAW_REPO_AGENT_STATE_HOME ?? "").trim();
   if (overrideRoot) return path.join(path.resolve(overrideRoot), PRODUCT_NAME);
@@ -91,6 +106,15 @@ export function resolveProviderHomes(env = process.env) {
   );
 }
 
+export function resolveCopilotSupportHomes(env = process.env) {
+  return Object.fromEntries(
+    Object.entries(COPILOT_SUPPORT_HOME_LAYOUT).map(([homeId, definition]) => [
+      homeId,
+      resolveProviderHomeRoot(definition, env)
+    ])
+  );
+}
+
 export function resolveAgentPaths(repoRoot, instanceId, env = process.env) {
   const repoPaths = resolveRepoPaths(repoRoot);
   const stateRoot = resolveStateRoot(env);
@@ -99,6 +123,7 @@ export function resolveAgentPaths(repoRoot, instanceId, env = process.env) {
   const mountInstanceRoot = path.join(mountRoot, "instances", instanceId);
   const toolingDir = path.join(instanceRoot, "tooling");
   const providerHomes = resolveProviderHomes(env);
+  const copilotSupportHomes = resolveCopilotSupportHomes(env);
 
   return {
     ...repoPaths,
@@ -109,11 +134,13 @@ export function resolveAgentPaths(repoRoot, instanceId, env = process.env) {
     stateFile: path.join(instanceRoot, "state.json"),
     instanceLockFile: path.join(instanceRoot, "instance.lock"),
     secretsEnvFile: path.join(instanceRoot, DEFAULT_SECRETS_ENV_FILE),
+    copilotSessionStateDir: path.join(mountInstanceRoot, "copilot-session-state"),
     toolingDir,
     toolingManifestFile: path.join(toolingDir, "tooling.manifest.json"),
     toolingContextDir: path.join(toolingDir, "context"),
     toolingScriptsDir: path.join(toolingDir, "scripts"),
     providerHomes,
+    copilotSupportHomes,
     pathsManifestFile: path.join(instanceRoot, "paths.json")
   };
 }

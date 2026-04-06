@@ -36,9 +36,11 @@ test("renderComposeTemplate always includes the managed runtime image and repo-l
   assert.match(output, /GEMINI_CLI_HOME: \$\{GEMINI_CLI_HOME\}/);
   assert.match(output, /COPILOT_HOME: \$\{COPILOT_HOME\}/);
   assert.match(output, /COPILOT_GITHUB_TOKEN: \$\{COPILOT_GITHUB_TOKEN:-\}/);
+  assert.match(output, /OPENCLAW_HOST_ENV_PASSTHROUGH_JSON: \$\{OPENCLAW_HOST_ENV_PASSTHROUGH_JSON\}/);
   assert.match(output, /OPENCLAW_CODEX_AUTH_SOURCE: \$\{OPENCLAW_CODEX_AUTH_SOURCE\}/);
   assert.match(output, /OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS: \$\{OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS\}/);
   assert.match(output, /\$\{TARGET_REPO_PATH\}:\/workspace:rw/);
+  assert.match(output, /\$\{OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH\}:\/home\/node\/\.copilot\/session-state:rw/);
   assert.match(output, /OPENCLAW_RENDER_STATUS_PATH: \$\{OPENCLAW_RENDER_STATUS_PATH\}/);
   assert.match(output, /openclaw\.instance-id: \$\{OPENCLAW_INSTANCE_ID\}/);
   assert.match(output, /openclaw\.compose-project: \$\{OPENCLAW_COMPOSE_PROJECT_NAME\}/);
@@ -51,6 +53,7 @@ test("renderComposeTemplate always includes the managed runtime image and repo-l
   assert.match(output, /retries: 20/);
   assert.match(output, /start_period: 60s/);
   assert.match(output, /mem_limit: \$\{OPENCLAW_CONTAINER_MEMORY_LIMIT\}/);
+  assert.match(output, /volumes:\s*\n  openclaw-home:/);
   assert.doesNotMatch(output, /OPENCLAW_IMAGE:/);
   assert.doesNotMatch(output, /OPENCLAW_AGENT_NPM_PACKAGES:/);
   assert.doesNotMatch(output, /OPENCLAW_TELEGRAM_PROXY/);
@@ -78,12 +81,20 @@ test("renderComposeTemplate includes direct provider-home mounts when requested"
       codex: true,
       gemini: true,
       copilot: true
-    }
+    },
+    copilotSupportHomeMounts: {
+      agents: true,
+      claude: false
+    },
+    hostEnvPassthroughNames: ["ADO_MCP_AUTH_TOKEN"]
   });
 
   assert.match(output, /\$\{OPENCLAW_CODEX_HOME_MOUNT_PATH\}:\$\{CODEX_HOME\}:ro/);
   assert.match(output, /\$\{OPENCLAW_GEMINI_CLI_HOME_MOUNT_PATH\}:\$\{GEMINI_CLI_HOME\}:ro/);
   assert.match(output, /\$\{OPENCLAW_COPILOT_HOME_MOUNT_PATH\}:\$\{COPILOT_HOME\}:ro/);
+  assert.match(output, /\$\{OPENCLAW_AGENTS_HOME_MOUNT_PATH\}:\/home\/node\/\.agents:ro/);
+  assert.match(output, /ADO_MCP_AUTH_TOKEN: \$\{ADO_MCP_AUTH_TOKEN:-\}/);
   assert.match(output, /OPENCLAW_AGENT_AUTH_CLI_BIN: \$\{OPENCLAW_AGENT_AUTH_CLI_BIN\}/);
+  assert.doesNotMatch(output, /\$\{OPENCLAW_CLAUDE_HOME_MOUNT_PATH\}:\/home\/node\/\.claude:ro/);
   assert.doesNotMatch(output, /OPENCLAW_AUTH_MIRRORS/);
 });

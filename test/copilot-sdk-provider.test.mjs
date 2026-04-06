@@ -228,3 +228,43 @@ test("copilot SDK tools explicitly override built-in tool names", () => {
   assert.equal(tool?.name, "edit");
   assert.equal(tool?.overridesBuiltInTool, true);
 });
+
+test("copilot SDK session config keeps host MCP tools available", () => {
+  const approveAll = () => {};
+  const sessionConfig = __private__.buildSessionConfig({
+    providerContext: {
+      provider: "github-copilot",
+      workspaceDir: "/workspace",
+    },
+    model: {
+      id: "gpt-5.4",
+      api: "openai-responses",
+      provider: "github-copilot",
+    },
+    context: {
+      systemPrompt: "You are helpful.",
+      tools: [{
+        name: "echo_test",
+        description: "Echo text",
+        parameters: {
+          type: "object",
+          properties: {
+            value: { type: "string" },
+          },
+        },
+      }],
+    },
+    runtime: {
+      sdkModule: { approveAll },
+    },
+    env: {
+      HOME: "/home/node",
+    },
+    reasoningEffort: "high",
+  });
+
+  assert.equal(sessionConfig.availableTools, undefined);
+  assert.equal(sessionConfig.onPermissionRequest, approveAll);
+  assert.match(sessionConfig.configDir ?? "", /[\\/]home[\\/]node[\\/]\.copilot$/);
+  assert.deepEqual(sessionConfig.tools.map((tool) => tool.name), ["echo_test"]);
+});

@@ -62,6 +62,26 @@ function prependPath(dirPath) {
   process.env.PATH = `${dirPath}:${process.env.PATH || ""}`;
 }
 
+function applyHostEnvPassthrough(env = process.env) {
+  const rawValue = String(env?.OPENCLAW_HOST_ENV_PASSTHROUGH_JSON ?? "").trim();
+  if (!rawValue) return;
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+
+  for (const [name, rawEnvValue] of Object.entries(parsed)) {
+    const normalizedName = String(name ?? "").trim();
+    const value = String(rawEnvValue ?? "").trim();
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(normalizedName) || !value) continue;
+    process.env[normalizedName] = value;
+  }
+}
+
 function resolveMountedCopilotConfigPath(env = process.env) {
   const copilotHome = String(env?.COPILOT_HOME ?? "").trim();
   if (copilotHome) return path.join(copilotHome, "config.json");
@@ -406,6 +426,7 @@ async function runBootstrap(logger = null) {
 }
 
 async function main() {
+  applyHostEnvPassthrough(process.env);
   const argv = process.argv.slice(2);
   const eventLogger = createProcessEventLogger(process.env, {
     component: "runtime.entrypoint"

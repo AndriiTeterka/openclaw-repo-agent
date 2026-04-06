@@ -188,6 +188,24 @@ async function main() {
     manifest,
     env: process.env,
   });
+  const baselineConfig = await readJsonFile("/workspace/.openclaw/runtime/host-baseline.json", null).catch(() => null);
+  if (baselineConfig) {
+    if (baselineConfig.mcp && Object.keys(baselineConfig.mcp.servers || {}).length > 0) {
+      nextConfig.mcp = nextConfig.mcp || { servers: {} };
+      Object.assign(nextConfig.mcp.servers, baselineConfig.mcp.servers);
+    }
+    if (baselineConfig.plugins && Object.keys(baselineConfig.plugins.entries || {}).length > 0) {
+      nextConfig.plugins = nextConfig.plugins || { entries: {} };
+      for (const [k, v] of Object.entries(baselineConfig.plugins.entries)) {
+         if (!nextConfig.plugins.entries[k]) nextConfig.plugins.entries[k] = v;
+         else { Object.assign(nextConfig.plugins.entries[k], v); }
+      }
+    }
+    if (baselineConfig.agents && baselineConfig.agents.defaults) {
+      nextConfig.agents.defaults = nextConfig.agents.defaults || {};
+      Object.assign(nextConfig.agents.defaults, baselineConfig.agents.defaults);
+    }
+  }
   const renderErrors = validateRenderedConfig(nextConfig);
   const status = buildStatus({
     manifestStatus,

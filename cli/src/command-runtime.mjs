@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 
@@ -81,6 +82,7 @@ import {
   writePathsManifest
 } from "./state-store.mjs";
 import {
+  COPILOT_SUPPORT_HOME_LAYOUT,
   PROVIDER_HOME_LAYOUT
 } from "./state-layout.mjs";
 import {
@@ -110,6 +112,7 @@ import {
 
 export const SECRETS_ENV_HEADER = "OpenClaw secrets. Keep this file out of git.";
 const TOOLING_MANIFEST_SCHEMA_VERSION = 1;
+const HOST_ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export const ACP_AGENT_CHOICES = SUPPORTED_ACP_AGENTS.map((agentId) => ({
   value: agentId,
@@ -118,6 +121,77 @@ export const ACP_AGENT_CHOICES = SUPPORTED_ACP_AGENTS.map((agentId) => ({
 
 function resolveObservedLogger(options = {}, component = "cli.runtime") {
   return options?.eventLogger?.child?.({ component }) || null;
+}
+
+function parseHostEnvPassthroughNames(rawValue = "") {
+  return uniqueStrings(
+    String(rawValue ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => HOST_ENV_NAME_PATTERN.test(entry))
+  );
+}
+
+function collectCopilotMcpEnvPassthroughNames(mcpConfig = null) {
+  const serverEntries = Object.entries(
+    mcpConfig?.mcpServers && typeof mcpConfig.mcpServers === "object" ? mcpConfig.mcpServers : {}
+  );
+  const detectedNames = [];
+
+  for (const [serverName, serverConfig] of serverEntries) {
+    if (!serverConfig || typeof serverConfig !== "object") continue;
+
+    const normalizedName = String(serverName ?? "").trim().toLowerCase();
+    const normalizedCommand = String(serverConfig.command ?? "").trim().toLowerCase();
+    const normalizedArgs = (Array.isArray(serverConfig.args) ? serverConfig.args : [])
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean);
+    const isAzureDevOpsMcp = normalizedName === "ado"
+      || normalizedCommand.includes("@azure-devops/mcp")
+      || normalizedArgs.some((entry) => entry.includes("@azure-devops/mcp"));
+    if (isAzureDevOpsMcp) {
+      const authIndex = normalizedArgs.findIndex((entry) => entry === "--authentication");
+      const authMode = authIndex >= 0 ? normalizedArgs[authIndex + 1] ?? "" : "";
+      if (!authMode || authMode === "envvar") detectedNames.push("ADO_MCP_AUTH_TOKEN");
+    }
+
+    const envBlock = serverConfig.env;
+    if (envBlock && typeof envBlock === "object" && !Array.isArray(envBlock)) {
+      for (const [envName, envValue] of Object.entries(envBlock)) {
+        if (HOST_ENV_NAME_PATTERN.test(envName)) detectedNames.push(envName);
+        if (HOST_ENV_NAME_PATTERN.test(String(envValue ?? "").trim())) {
+          detectedNames.push(String(envValue ?? "").trim());
+        }
+      }
+    }
+  }
+
+  return uniqueStrings(detectedNames);
+}
+
+async function resolveHostEnvPassthroughEntries(context, localEnv = {}) {
+  const copilotHome = String(context?.paths?.providerHomes?.copilot ?? "").trim();
+  const explicitNames = parseHostEnvPassthroughNames(
+    localEnv.OPENCLAW_HOST_ENV_PASSTHROUGH_NAMES ?? process.env.OPENCLAW_HOST_ENV_PASSTHROUGH_NAMES ?? ""
+  );
+
+  let detectedNames = [];
+  if (copilotHome) {
+    const mcpConfigPath = path.join(copilotHome, "mcp-config.json");
+    if (await fileExists(mcpConfigPath)) {
+      const mcpConfig = await readJsonFile(mcpConfigPath, null).catch(() => null);
+      detectedNames = collectCopilotMcpEnvPassthroughNames(mcpConfig);
+    }
+  }
+
+  const passthroughEntries = {};
+  for (const envName of uniqueStrings([...explicitNames, ...detectedNames])) {
+    const value = String(process.env?.[envName] ?? "").trim();
+    if (!value) continue;
+    passthroughEntries[envName] = value;
+  }
+
+  return passthroughEntries;
 }
 
 function encodePowerShellCommand(script) {
@@ -587,7 +661,109 @@ async function resolveBridgedCopilotRuntimeToken(manifest, localEnv = {}, detect
   return normalizeCopilotCliToken(await resolveCopilotRuntimeToken(localEnv, detectedAuthPaths));
 }
 
-async function buildRuntimeEnv(context, plugin, manifest, localEnv, runtimeImages, detectedAuthPaths = {}, providerHomeMounts = null) {
+
+async function syncPersonalBaseline(context, localEnv) {
+  const hostOpenClawPath = path.join(os.homedir(), ".openclaw");
+  const hostConfigPath = path.join(hostOpenClawPath, "config.json");
+  const hostConfig = await readJsonFile(hostConfigPath, null).catch(() => null);
+  const baseline = {
+    mcp: { servers: {} },
+    plugins: { entries: {} },
+    agents: { defaults: {} },
+  };
+  const mirroredEnv = {};
+  const sharedSkillsPath = path.join(hostOpenClawPath, "skills");
+
+  if (hostConfig && typeof hostConfig === "object" && !Array.isArray(hostConfig)) {
+    const hostPlugins = (hostConfig.plugins && typeof hostConfig.plugins.entries === "object") ? hostConfig.plugins.entries : {};
+    for (const [pluginId, pluginConfig] of Object.entries(hostPlugins)) {
+      if (!pluginConfig || typeof pluginConfig !== "object") continue;
+      baseline.plugins.entries[pluginId] = { enabled: pluginConfig.enabled, config: (pluginConfig.config && typeof pluginConfig.config === "object") ? pluginConfig.config : {} };
+    }
+    if (hostConfig.agent && typeof hostConfig.agent === "object") {
+      baseline.agents.defaults.verboseDefault = hostConfig.agent.verboseDefault;
+      baseline.agents.defaults.thinkingDefault = hostConfig.agent.thinkingDefault;
+      baseline.agents.defaults.blockStreamingDefault = hostConfig.agent.blockStreamingDefault;
+      baseline.agents.defaults.blockStreamingBreak = hostConfig.agent.blockStreamingBreak;
+      baseline.agents.defaults.typingMode = hostConfig.agent.typingMode;
+      baseline.agents.defaults.typingIntervalSeconds = hostConfig.agent.typingIntervalSeconds;
+    }
+  }
+
+  const mcpSources = [];
+  if (hostConfig?.mcp?.servers && typeof hostConfig.mcp.servers === "object" && !Array.isArray(hostConfig.mcp.servers)) {
+    mcpSources.push(hostConfig.mcp.servers);
+  }
+
+  const providerHomes = [
+    context?.paths?.providerHomes?.codex,
+    context?.paths?.providerHomes?.copilot
+  ].filter(Boolean);
+
+  for (const pHome of providerHomes) {
+    for (const fileName of ["mcp-config.json", "config.json"]) {
+      const pConfigPath = path.join(pHome, fileName);
+      try {
+        if (await fileExists(pConfigPath)) {
+          const pConfig = await readJsonFile(pConfigPath, null).catch(() => null);
+          if (pConfig && typeof pConfig.mcpServers === "object" && !Array.isArray(pConfig.mcpServers)) {
+            mcpSources.push(pConfig.mcpServers);
+          }
+          if (pConfig?.mcp?.servers && typeof pConfig.mcp.servers === "object" && !Array.isArray(pConfig.mcp.servers)) {
+            mcpSources.push(pConfig.mcp.servers);
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  for (const hostServers of mcpSources) {
+    for (const [serverId, serverConfig] of Object.entries(hostServers)) {
+      if (!serverConfig || typeof serverConfig !== "object") continue;
+      const cmd = String(serverConfig.command || "");
+      const args = Array.isArray(serverConfig.args) ? serverConfig.args : [];
+      const cwd = String(serverConfig.cwd || serverConfig.workingDirectory || "");
+      const isWindowsPath = (p) => /^[a-zA-Z]:[\\/]/.test(p);
+      const isPortableCmd = ["node", "python", "npx", "uvx"].includes(cmd);
+      
+      if (!isPortableCmd && isWindowsPath(cmd)) {
+        console.log(`Skipped MCP server ${serverId}: Windows path not portable to Docker runtime`);
+        continue;
+      }
+      if (args.some(a => isWindowsPath(a))) {
+        console.log(`Skipped MCP server ${serverId}: arguments contain Windows paths`);
+        continue;
+      }
+      if (isWindowsPath(cwd)) {
+        console.log(`Skipped MCP server ${serverId}: workingDirectory is a Windows path`);
+        continue;
+      }
+      
+      const serverEnv = (serverConfig.env && typeof serverConfig.env === "object") ? serverConfig.env : {};
+      let missingEnv = false;
+      const requiredEnv = {};
+      for (const [k, v] of Object.entries(serverEnv)) {
+         if (process.env[k] !== undefined) requiredEnv[k] = process.env[k];
+         else if (localEnv[k] !== undefined) requiredEnv[k] = localEnv[k];
+         else {
+             if (v && typeof v === "string" && !v.startsWith("$")) requiredEnv[k] = v;
+             else { 
+               console.log(`Skipped MCP server ${serverId}: missing required env ${k}`);
+               missingEnv = true; break; 
+             }
+         }
+      }
+      if (missingEnv) continue;
+      baseline.mcp.servers[serverId] = serverConfig;
+      Object.assign(mirroredEnv, requiredEnv);
+    }
+  }
+  let hasSharedSkills = false;
+  try { if (await fileExists(sharedSkillsPath)) hasSharedSkills = true; } catch (e) {}
+  return { baseline, mirroredEnv, sharedSkillsPath: hasSharedSkills ? sharedSkillsPath : null };
+}
+
+async function buildRuntimeEnv(context, plugin, manifest, localEnv, runtimeImages, detectedAuthPaths = {}, providerHomeMounts = null, copilotSupportHomeMounts = null) {
   const gatewayPort = localEnv.OPENCLAW_GATEWAY_PORT || String(LEGACY_COMPOSE_PORT);
   const controlUiOrigins = localEnv.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS
     || JSON.stringify([`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`]);
@@ -595,6 +771,11 @@ async function buildRuntimeEnv(context, plugin, manifest, localEnv, runtimeImage
   const openclawContainerMemoryLimit = String(localEnv.OPENCLAW_CONTAINER_MEMORY_LIMIT ?? process.env.OPENCLAW_CONTAINER_MEMORY_LIMIT ?? "4g").trim();
   const authProvider = getAuthBootstrapProviderForMode(manifest.security.authBootstrapMode);
   const runtimeProviderHomeMounts = providerHomeMounts ?? await resolveProviderHomeMounts(context);
+  const runtimeCopilotSupportHomeMounts = copilotSupportHomeMounts ?? await resolveCopilotSupportHomeMounts(context);
+  const hostEnvPassthroughEntries = await resolveHostEnvPassthroughEntries(context, localEnv);
+  const hostEnvPassthroughJson = Object.keys(hostEnvPassthroughEntries).length > 0
+    ? JSON.stringify(hostEnvPassthroughEntries)
+    : "";
   const codexAuthSource = resolveRuntimeAuthSource("codex", detectedAuthPaths);
   const geminiAuthSource = resolveRuntimeAuthSource("gemini", detectedAuthPaths);
   const copilotAuthSource = resolveRuntimeAuthSource("copilot", detectedAuthPaths);
@@ -656,6 +837,12 @@ async function buildRuntimeEnv(context, plugin, manifest, localEnv, runtimeImage
     OPENCLAW_CODEX_HOME_MOUNT_PATH: runtimeProviderHomeMounts.codex?.hostMountPath || "",
     OPENCLAW_GEMINI_CLI_HOME_MOUNT_PATH: runtimeProviderHomeMounts.gemini?.hostMountPath || "",
     OPENCLAW_COPILOT_HOME_MOUNT_PATH: runtimeProviderHomeMounts.copilot?.hostMountPath || "",
+    OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH: toDockerPath(context.paths.copilotSessionStateDir),
+    OPENCLAW_AGENTS_HOME_MOUNT_PATH: runtimeCopilotSupportHomeMounts.agents?.hostMountPath || "",
+    OPENCLAW_CLAUDE_HOME_MOUNT_PATH: runtimeCopilotSupportHomeMounts.claude?.hostMountPath || "",
+    OPENCLAW_SHARED_SKILLS_PATH: localEnv.OPENCLAW_SHARED_SKILLS_PATH || "",
+    ...hostEnvPassthroughEntries,
+    OPENCLAW_HOST_ENV_PASSTHROUGH_JSON: hostEnvPassthroughJson,
     OPENCLAW_TELEGRAM_TOKEN_HASH: telegramTokenHash,
     TELEGRAM_BOT_TOKEN: localEnv.TELEGRAM_BOT_TOKEN || "",
     ...(copilotRuntimeToken ? {
@@ -769,6 +956,22 @@ async function resolveProviderHomeMounts(context) {
       const hostPath = String(providerHomes[agentId] ?? "").trim();
       const available = Boolean(hostPath) && await fileExists(hostPath);
       return [agentId, {
+        available,
+        hostMountPath: available ? toDockerPath(hostPath) : "",
+        runtimePath: definition.runtimePath
+      }];
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+async function resolveCopilotSupportHomeMounts(context) {
+  const copilotSupportHomes = context?.paths?.copilotSupportHomes ?? {};
+  const entries = await Promise.all(
+    Object.entries(COPILOT_SUPPORT_HOME_LAYOUT).map(async ([homeId, definition]) => {
+      const hostPath = String(copilotSupportHomes[homeId] ?? "").trim();
+      const available = Boolean(hostPath) && await fileExists(hostPath);
+      return [homeId, {
         available,
         hostMountPath: available ? toDockerPath(hostPath) : "",
         runtimePath: definition.runtimePath
@@ -1433,7 +1636,17 @@ export async function renderState(resolvedState, { targets = ["runtime"], materi
     let runtimeCommandEnv = resolvedState.runtimeCommandEnv ?? {};
     if (wantsRuntime && materializedRuntime) {
       const providerHomeMounts = await resolveProviderHomeMounts(context);
+      const copilotSupportHomeMounts = await resolveCopilotSupportHomeMounts(context);
+      const hostEnvPassthroughEntries = await resolveHostEnvPassthroughEntries(context, localEnv);
+      await ensureDir(context.paths.copilotSessionStateDir);
       runtimeCommandEnv = await resolveRuntimeCommandEnv(localEnv, resolvedState.detectedAuthPaths);
+
+      const { baseline, mirroredEnv, sharedSkillsPath } = await syncPersonalBaseline(context, localEnv);
+      await writeTextFile(path.join(context.paths.runtimeDir, "host-baseline.json"), JSON.stringify(baseline, null, 2));
+      Object.assign(hostEnvPassthroughEntries, mirroredEnv);
+      Object.assign(localEnv, mirroredEnv);
+      if (sharedSkillsPath) localEnv.OPENCLAW_SHARED_SKILLS_PATH = sharedSkillsPath;
+
       runtimeEnv = await buildRuntimeEnv(
         context,
         resolvedState.plugin,
@@ -1441,11 +1654,15 @@ export async function renderState(resolvedState, { targets = ["runtime"], materi
         localEnv,
         materializedRuntime,
         resolvedState.detectedAuthPaths,
-        providerHomeMounts
+        providerHomeMounts,
+        copilotSupportHomeMounts
       );
       await writeEnvFile(context.paths.runtimeEnvFile, runtimeEnv);
       await writeTextFile(context.paths.composeFile, renderComposeTemplate({
-        providerHomeMounts
+        providerHomeMounts,
+        copilotSupportHomeMounts,
+        hostEnvPassthroughNames: Object.keys(hostEnvPassthroughEntries),
+        sharedSkillsPath
       }));
       await writeTextFile(
         context.paths.playwrightConfigFile,

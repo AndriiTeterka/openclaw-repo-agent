@@ -23,6 +23,8 @@ const GEMINI_OAUTH_CLIENT_SECRET_ENV = "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET";
 const GEMINI_CLI_PACKAGE_ROOT_ENV = "OPENCLAW_GEMINI_CLI_PACKAGE_ROOT";
 const GEMINI_OAUTH_CLIENT_ID_PATTERN = /\b\d{6,}-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/;
 const GEMINI_OAUTH_CLIENT_SECRET_PATTERN = /\bGOCSPX-[A-Za-z0-9_-]+\b/;
+const GEMINI_NAMED_OAUTH_CLIENT_ID_PATTERN = /\bOAUTH_CLIENT_ID\b\s*[:=]\s*["'](\d{6,}-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com)["']/;
+const GEMINI_NAMED_OAUTH_CLIENT_SECRET_PATTERN = /\bOAUTH_CLIENT_SECRET\b\s*[:=]\s*["'](GOCSPX-[A-Za-z0-9_-]+)["']/;
 const GEMINI_TIER_FREE = "free-tier";
 const GEMINI_TIER_LEGACY = "legacy-tier";
 const GEMINI_TIER_STANDARD = "standard-tier";
@@ -37,16 +39,67 @@ function uniqueStrings(values = []) {
   return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
 }
 
+function extractPatternMatches(source = "", pattern) {
+  return uniqueStrings(source.match(new RegExp(pattern.source, `${pattern.flags}g`)) ?? []);
+}
+
+function decodeJwtPayload(token = "") {
+  const rawToken = String(token ?? "").trim();
+  if (!rawToken) return null;
+  const [, payload] = rawToken.split(".");
+  if (!payload) return null;
+
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveGeminiPreferredClientIds(authData = null) {
+  const idToken = findFirstStringProperty(authData, ["id_token", "idToken"]);
+  const payload = decodeJwtPayload(idToken);
+  return uniqueStrings([
+    findFirstStringProperty(authData, ["client_id", "clientId"]),
+    payload?.azp,
+    payload?.aud,
+  ]);
+}
+
+function selectGeminiOauthClientPair(clientIds = [], clientSecrets = [], preferredClientIds = []) {
+  const normalizedClientIds = uniqueStrings(clientIds);
+  const normalizedClientSecrets = uniqueStrings(clientSecrets);
+  if (normalizedClientIds.length === 0 || normalizedClientSecrets.length === 0) return null;
+
+  const preferredClientId = uniqueStrings(preferredClientIds)
+    .find((candidate) => normalizedClientIds.includes(candidate));
+  if (preferredClientId && normalizedClientSecrets.length === 1) {
+    return { clientId: preferredClientId, clientSecret: normalizedClientSecrets[0] };
+  }
+
+  if (normalizedClientIds.length === 1 && normalizedClientSecrets.length === 1) {
+    return { clientId: normalizedClientIds[0], clientSecret: normalizedClientSecrets[0] };
+  }
+
+  return null;
+}
+
 function resolveGeminiCliBundleRoots(env = process.env) {
   const explicitRoot = String(env?.[GEMINI_CLI_PACKAGE_ROOT_ENV] ?? "").trim();
   const authCliBin = String(env?.OPENCLAW_AGENT_AUTH_CLI_BIN ?? "").trim();
   const authCliRoot = authCliBin
-    ? path.resolve(path.dirname(authCliBin), "..", "lib", "node_modules", "@google", "gemini-cli", "bundle")
+    ? process.platform === "win32"
+      ? path.resolve(path.dirname(authCliBin), "node_modules", "@google", "gemini-cli", "bundle")
+      : path.resolve(path.dirname(authCliBin), "..", "lib", "node_modules", "@google", "gemini-cli", "bundle")
+    : "";
+  const windowsGlobalRoot = process.platform === "win32" && String(env?.APPDATA ?? "").trim()
+    ? path.resolve(String(env.APPDATA), "npm", "node_modules", "@google", "gemini-cli", "bundle")
     : "";
 
   return uniqueStrings([
     explicitRoot,
     authCliRoot,
+    windowsGlobalRoot,
     "/usr/local/lib/node_modules/@google/gemini-cli/bundle",
     "/usr/lib/node_modules/@google/gemini-cli/bundle",
   ]);
@@ -78,19 +131,29 @@ async function listGeminiCliBundleFiles(rootDir) {
   return files;
 }
 
-function extractGeminiOauthClientPair(source = "") {
-  const clientId = source.match(GEMINI_OAUTH_CLIENT_ID_PATTERN)?.[0] ?? "";
-  const clientSecret = source.match(GEMINI_OAUTH_CLIENT_SECRET_PATTERN)?.[0] ?? "";
-  return clientId && clientSecret ? { clientId, clientSecret } : null;
+function extractGeminiOauthClientPair(source = "", preferredClientIds = []) {
+  const namedClientId = source.match(GEMINI_NAMED_OAUTH_CLIENT_ID_PATTERN)?.[1] ?? "";
+  const namedClientSecret = source.match(GEMINI_NAMED_OAUTH_CLIENT_SECRET_PATTERN)?.[1] ?? "";
+  if (namedClientId && namedClientSecret) {
+    return { clientId: namedClientId, clientSecret: namedClientSecret };
+  }
+
+  return selectGeminiOauthClientPair(
+    extractPatternMatches(source, GEMINI_OAUTH_CLIENT_ID_PATTERN),
+    extractPatternMatches(source, GEMINI_OAUTH_CLIENT_SECRET_PATTERN),
+    preferredClientIds,
+  );
 }
 
-async function discoverGeminiCliOAuthClientPair(env = process.env) {
+async function discoverGeminiCliOAuthClientPair(authData, env = process.env) {
+  const preferredClientIds = resolveGeminiPreferredClientIds(authData);
+
   for (const rootDir of resolveGeminiCliBundleRoots(env)) {
     const bundleFiles = await listGeminiCliBundleFiles(rootDir);
     if (bundleFiles.length === 0) continue;
 
-    let clientId = "";
-    let clientSecret = "";
+    const fallbackClientIds = [];
+    const fallbackClientSecrets = [];
     for (const filePath of bundleFiles) {
       let source = "";
       try {
@@ -99,11 +162,22 @@ async function discoverGeminiCliOAuthClientPair(env = process.env) {
         continue;
       }
 
-      if (!clientId) clientId = source.match(GEMINI_OAUTH_CLIENT_ID_PATTERN)?.[0] ?? "";
-      if (!clientSecret) clientSecret = source.match(GEMINI_OAUTH_CLIENT_SECRET_PATTERN)?.[0] ?? "";
-      if (clientId && clientSecret) {
-        return { clientId, clientSecret, source: filePath };
+      const pair = extractGeminiOauthClientPair(source, preferredClientIds);
+      if (pair) {
+        return { ...pair, source: filePath };
       }
+
+      fallbackClientIds.push(...extractPatternMatches(source, GEMINI_OAUTH_CLIENT_ID_PATTERN));
+      fallbackClientSecrets.push(...extractPatternMatches(source, GEMINI_OAUTH_CLIENT_SECRET_PATTERN));
+    }
+
+    const fallbackPair = selectGeminiOauthClientPair(
+      fallbackClientIds,
+      fallbackClientSecrets,
+      preferredClientIds,
+    );
+    if (fallbackPair) {
+      return { ...fallbackPair, source: rootDir };
     }
   }
 
@@ -129,7 +203,7 @@ async function resolveGeminiOAuthClientPair(authData, env = process.env) {
     return { clientId: envClientId, clientSecret: envClientSecret, source: "env" };
   }
 
-  const discovered = await discoverGeminiCliOAuthClientPair(env);
+  const discovered = await discoverGeminiCliOAuthClientPair(authData, env);
   if (discovered) return discovered;
 
   throw new Error("Gemini OAuth client credentials could not be resolved from mounted auth data or the installed Gemini CLI.");

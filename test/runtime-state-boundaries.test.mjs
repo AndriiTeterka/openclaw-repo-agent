@@ -95,13 +95,16 @@ test("renderState runtime env mounts provider homes and excludes legacy auth sur
   const context = await createTempContext((tempRoot) => ({
     CODEX_HOME: path.join(tempRoot, ".codex"),
     GEMINI_CLI_HOME: path.join(tempRoot, ".gemini"),
-    COPILOT_HOME: path.join(tempRoot, ".copilot")
+    COPILOT_HOME: path.join(tempRoot, ".copilot"),
+    OPENCLAW_AGENTS_HOME: path.join(tempRoot, ".agents"),
+    OPENCLAW_CLAUDE_HOME: path.join(tempRoot, ".claude")
   }));
   context.commandRunner = async () => {
     throw new Error("renderState should not spawn commands");
   };
   await fs.mkdir(context.paths.providerHomes.codex, { recursive: true });
   await fs.mkdir(context.paths.providerHomes.gemini, { recursive: true });
+  await fs.mkdir(path.join(path.dirname(context.repoRoot), ".agents"), { recursive: true });
 
   const resolved = await resolveState(context);
   await renderState(resolved, {
@@ -127,9 +130,15 @@ test("renderState runtime env mounts provider homes and excludes legacy auth sur
   assert.match(runtimeEnv, /OPENCLAW_CODEX_HOME_MOUNT_PATH=.*\.codex/);
   assert.match(runtimeEnv, /OPENCLAW_GEMINI_CLI_HOME_MOUNT_PATH=.*\.gemini/);
   assert.match(runtimeEnv, /OPENCLAW_COPILOT_HOME_MOUNT_PATH=\r?\n/);
+  assert.match(runtimeEnv, /OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH=.*copilot-session-state/);
+  assert.match(runtimeEnv, /OPENCLAW_AGENTS_HOME_MOUNT_PATH=.*\.agents/);
+  assert.match(runtimeEnv, /OPENCLAW_CLAUDE_HOME_MOUNT_PATH=\r?\n/);
   assert.match(composeSource, /\$\{OPENCLAW_CODEX_HOME_MOUNT_PATH\}:\$\{CODEX_HOME\}:ro/);
   assert.match(composeSource, /\$\{OPENCLAW_GEMINI_CLI_HOME_MOUNT_PATH\}:\$\{GEMINI_CLI_HOME\}:ro/);
+  assert.match(composeSource, /\$\{OPENCLAW_COPILOT_SESSION_STATE_MOUNT_PATH\}:\/home\/node\/\.copilot\/session-state:rw/);
+  assert.match(composeSource, /\$\{OPENCLAW_AGENTS_HOME_MOUNT_PATH\}:\/home\/node\/\.agents:ro/);
   assert.doesNotMatch(composeSource, /\$\{OPENCLAW_COPILOT_HOME_MOUNT_PATH\}:\$\{COPILOT_HOME\}:ro/);
+  assert.doesNotMatch(composeSource, /\$\{OPENCLAW_CLAUDE_HOME_MOUNT_PATH\}:\/home\/node\/\.claude:ro/);
   assert.doesNotMatch(runtimeEnv, /OPENCLAW_CODEX_AUTH_PATH=|OPENCLAW_GEMINI_AUTH_PATH=|OPENCLAW_COPILOT_AUTH_PATH=|TARGET_AUTH_PATH=|OPENCLAW_AUTH_MIRRORS_DIR=|OPENCLAW_AUTH_MIRRORS_MOUNT_PATH=|OPENAI_API_KEY=|GEMINI_API_KEY=|COPILOT_GITHUB_TOKEN=|GITHUB_TOKEN=/);
 });
 
@@ -208,6 +217,59 @@ test("renderState forwards the host-discovered Copilot model list into the runti
   const composeSource = await fs.readFile(context.paths.composeFile, "utf8");
   assert.match(runtimeEnv, /OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS=\["claude-sonnet-4\.6","gpt-5\.4"\]/);
   assert.match(composeSource, /OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS: \$\{OPENCLAW_MODEL_DISCOVERY_COPILOT_MODELS\}/);
+});
+
+test("renderState forwards detected Copilot MCP auth env into the runtime", async () => {
+  const context = await createTempContext((tempRoot) => ({
+    COPILOT_HOME: path.join(tempRoot, ".copilot"),
+    ADO_MCP_AUTH_TOKEN: "ado_test_token_value",
+  }));
+  context.commandRunner = async () => {
+    throw new Error("renderState should not spawn commands");
+  };
+  await fs.mkdir(context.paths.providerHomes.copilot, { recursive: true });
+  await fs.writeFile(
+    path.join(context.paths.providerHomes.copilot, "mcp-config.json"),
+    `${JSON.stringify({
+      mcpServers: {
+        ado: {
+          command: "npx",
+          args: ["-y", "@azure-devops/mcp", "Intrack-Microservices", "--authentication", "envvar"],
+        },
+      },
+    }, null, 2)}\n`
+  );
+
+  const resolved = await resolveState(context);
+  await renderState(resolved, {
+    targets: ["runtime"],
+    materializedRuntime: {
+      runtimeCoreImage: "ghcr.io/andriiteterka/openclaw-repo-agent-runtime-core:latest",
+      runtimeCoreDigest: "sha256:test",
+      toolingImage: "openclaw-repo-agent-tooling:test",
+      coreProvenance: "pulled",
+    },
+    options: {},
+  });
+
+  const runtimeEnv = await fs.readFile(context.paths.runtimeEnvFile, "utf8");
+  const composeSource = await fs.readFile(context.paths.composeFile, "utf8");
+  assert.match(
+    runtimeEnv,
+    /(^|[\r\n])ADO_MCP_AUTH_TOKEN=[^\r\n]+/
+  );
+  assert.match(
+    runtimeEnv,
+    /OPENCLAW_HOST_ENV_PASSTHROUGH_JSON=\{"ADO_MCP_AUTH_TOKEN":"[^"\r\n]+"\}/
+  );
+  assert.match(
+    composeSource,
+    /OPENCLAW_HOST_ENV_PASSTHROUGH_JSON: \$\{OPENCLAW_HOST_ENV_PASSTHROUGH_JSON\}/
+  );
+  assert.match(
+    composeSource,
+    /ADO_MCP_AUTH_TOKEN: \$\{ADO_MCP_AUTH_TOKEN:-\}/
+  );
 });
 
 test("resolve/render/materialize emit structured events and propagate runtime correlation ids", async () => {

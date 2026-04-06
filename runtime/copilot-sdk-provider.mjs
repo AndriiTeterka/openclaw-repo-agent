@@ -420,26 +420,15 @@ async function resolveSessionState({ providerContext, model, context, options, d
 
   await ensureSessionStateDirectories(sessionKey, env);
 
-  const sessionConfig = {
-    clientName: CLIENT_NAME,
-    model: model.id,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-    ...(context?.systemPrompt
-      ? {
-        systemMessage: {
-          mode: "append",
-          content: context.systemPrompt,
-        },
-      }
-      : {}),
+  const sessionConfig = buildSessionConfig({
+    providerContext,
+    model,
+    context,
+    runtime,
+    env,
+    reasoningEffort,
     tools,
-    availableTools: tools.map((tool) => tool.name),
-    onPermissionRequest: runtime.sdkModule.approveAll,
-    workingDirectory: providerContext?.workspaceDir || process.cwd(),
-    configDir: resolveCopilotHome(env) || undefined,
-    streaming: true,
-    infiniteSessions: { enabled: false },
-  };
+  });
 
   let session = null;
   try {
@@ -751,9 +740,41 @@ export function createCopilotSdkProviderStreamWrapper(providerContext, deps = {}
   });
 }
 
+function buildSessionConfig({
+  providerContext,
+  model,
+  context,
+  runtime,
+  env = process.env,
+  reasoningEffort,
+  tools = normalizePiTools(context?.tools),
+}) {
+  return {
+    clientName: CLIENT_NAME,
+    model: model.id,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(context?.systemPrompt
+      ? {
+        systemMessage: {
+          mode: "append",
+          content: context.systemPrompt,
+        },
+      }
+      : {}),
+    // Let Copilot keep its built-in and configured MCP tools available; we only append OpenClaw tools here.
+    tools,
+    onPermissionRequest: runtime.sdkModule.approveAll,
+    workingDirectory: providerContext?.workspaceDir || process.cwd(),
+    configDir: resolveCopilotHome(env) || undefined,
+    streaming: true,
+    infiniteSessions: { enabled: false },
+  };
+}
+
 export const __private__ = Object.freeze({
   AssistantMessageEventStream,
   applyPendingToolResults,
+  buildSessionConfig,
   buildCliEnv,
   buildUsage,
   defaultToolUseQuietMs: DEFAULT_TOOL_USE_QUIET_MS,

@@ -573,16 +573,21 @@ test("refreshGeminiCliOAuthData forces a fresh access token from the refresh tok
   assert.ok(refreshed.expires > Date.now());
 });
 
-test("refreshGeminiCliOAuthData discovers client credentials from the installed Gemini CLI bundle", async () => {
+test("refreshGeminiCliOAuthData prefers the Gemini OAuth client pair from the installed Gemini CLI bundle", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-bundle-"));
   const bundleRoot = path.join(tempRoot, "bundle");
+  const distractorClientId = ["210987654321", "-cloudsdkclient", ".apps.googleusercontent.com"].join("");
   const fakeClientId = ["123456789012", "-fakeoauthclient", ".apps.googleusercontent.com"].join("");
   const fakeClientSecret = ["GOCSPX", "-fake_secret_value"].join("");
 
   await fs.mkdir(bundleRoot, { recursive: true });
   await fs.writeFile(
     path.join(bundleRoot, "oauth2-provider.js"),
-    `const config = { client_id: "${fakeClientId}", client_secret: "${fakeClientSecret}" };`,
+    [
+      `var CLOUD_SDK_CLIENT_ID = "${distractorClientId}";`,
+      `var OAUTH_CLIENT_ID = "${fakeClientId}";`,
+      `var OAUTH_CLIENT_SECRET = "${fakeClientSecret}";`,
+    ].join("\n"),
   );
 
   const requests = [];
@@ -609,6 +614,7 @@ test("refreshGeminiCliOAuthData discovers client credentials from the installed 
   });
 
   assert.equal(requests.length, 1);
+  assert.ok(!requests[0].body.includes(`client_id=${distractorClientId}`));
   assert.match(requests[0].body, new RegExp(`client_id=${fakeClientId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   assert.match(requests[0].body, new RegExp(`client_secret=${fakeClientSecret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
